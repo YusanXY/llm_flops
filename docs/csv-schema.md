@@ -1,5 +1,9 @@
 # CSV schemas
 
+These schemas are identical under repository `results/` and KDA task `bench/`.
+Generated CSV files are recovery artifacts owned by the engine and must not be
+hand-edited by an Agent.
+
 `benchmark_engine.reporting.csv_writer` is authoritative. CSV files are UTF-8
 RFC 4180 with CRLF records. `schema_version` is first; empty is the only null;
 booleans are lowercase; numbers must be finite. Writers validate the complete

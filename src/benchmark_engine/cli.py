@@ -54,6 +54,9 @@ def build_parser() -> argparse.ArgumentParser:
     list_parser.add_argument(
         "--candidate", default="*", metavar="GLOB", help="candidate ID glob"
     )
+    list_parser.add_argument(
+        "--task-root", type=Path, help="KDA task containing baseline/ and solution/"
+    )
 
     validate_parser = commands.add_parser(
         "validate", help="validate operator and candidate manifests"
@@ -61,11 +64,17 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser.add_argument(
         "--operator", default="*", metavar="GLOB", help="operator ID glob"
     )
+    validate_parser.add_argument(
+        "--task-root", type=Path, help="KDA task containing baseline/ and solution/"
+    )
 
     env_parser = commands.add_parser("env", help="collect the benchmark environment")
     env_parser.add_argument("--json", action="store_true", help="emit stable JSON")
 
-    run_parser = commands.add_parser("run", help="run a correctness evaluation")
+    run_parser = commands.add_parser("run", help="run correctness and/or performance")
+    run_parser.add_argument(
+        "--task-root", type=Path, help="KDA task containing baseline/ and solution/"
+    )
     run_parser.add_argument("--suite", metavar="ID")
     run_parser.add_argument("--dry-run", action="store_true")
     run_parser.add_argument("--operator", action="append", default=[], metavar="GLOB")
@@ -79,7 +88,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument(
         "--mode", choices=("all", "correctness", "performance")
     )
-    run_parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    run_parser.add_argument("--output-root", type=Path)
     run_parser.add_argument("--evaluation-id")
     run_parser.add_argument(
         "--resume",
@@ -116,14 +125,16 @@ def build_parser() -> argparse.ArgumentParser:
     summary_parser.add_argument("--candidate")
     summary_parser.add_argument("--evaluation")
     summary_parser.add_argument("--run", dest="summary_run")
-    summary_parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    summary_parser.add_argument("--task-root", type=Path)
+    summary_parser.add_argument("--output-root", type=Path)
     compare_parser = commands.add_parser("compare", help="compare compatible performance artifacts")
     current = compare_parser.add_mutually_exclusive_group(required=True)
     current.add_argument("--result", metavar="EVALUATION")
     current.add_argument("--run", metavar="RUN_ID")
     compare_parser.add_argument("--baseline-result", metavar="EVALUATION")
     compare_parser.add_argument("--baseline-run", metavar="RUN_ID")
-    compare_parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
+    compare_parser.add_argument("--task-root", type=Path)
+    compare_parser.add_argument("--output-root", type=Path)
     return parser
 
 
@@ -138,6 +149,22 @@ def _selected_operators(snapshot: RegistrySnapshot, pattern: str) -> tuple[str, 
         for operator_id in snapshot.discovered_operator_ids
         if fnmatch.fnmatchcase(operator_id, pattern)
     )
+
+
+def _resolve_task_root(arguments: argparse.Namespace, root: Path) -> Path | None:
+    value = getattr(arguments, "task_root", None)
+    if value is None:
+        return None
+    return (value if value.is_absolute() else root / value).resolve()
+
+
+def _resolve_output_root(
+    arguments: argparse.Namespace, root: Path, task_root: Path | None
+) -> Path:
+    value = getattr(arguments, "output_root", None)
+    if value is None:
+        return (task_root / "bench" if task_root is not None else root / DEFAULT_OUTPUT_ROOT).resolve()
+    return (value if value.is_absolute() else root / value).resolve()
 
 
 def _run_list(
@@ -213,6 +240,7 @@ def main(
     if arguments.command is None:
         return 0
     root = Path(repository_root or Path.cwd()).resolve()
+    task_root = _resolve_task_root(arguments, root)
     if arguments.command == "env":
         try:
             report = collect_report(root / "requirements" / "benchmark-lock.json")
@@ -259,9 +287,7 @@ def main(
                 file=sys.stderr,
             )
             return 2
-        output_root = arguments.output_root
-        if not output_root.is_absolute():
-            output_root = root / output_root
+        output_root = _resolve_output_root(arguments, root, task_root)
         if arguments.summary_run:
             try:
                 print(summarize_run(output_root, arguments.summary_run), end="")
@@ -278,7 +304,7 @@ def main(
                 arguments.evaluation,
             )
         elif not target.is_absolute():
-            target = root / target
+            target = (task_root / "bench" if task_root is not None else root) / target
         try:
             print(summarize_evaluation(target), end="")
         except (OSError, CsvContractError, ValueError) as error:
@@ -296,8 +322,7 @@ def main(
         if arguments.baseline_run is not None and arguments.baseline_result is not None:
             print("compare baseline forms are mutually exclusive", file=sys.stderr)
             return 2
-        output_root = arguments.output_root
-        if not output_root.is_absolute(): output_root = root / output_root
+        output_root = _resolve_output_root(arguments, root, task_root)
         try:
             print(compare_artifacts(output_root,
                 arguments.run if run_mode else arguments.result,
@@ -308,9 +333,7 @@ def main(
             return 2
         return 0
     if arguments.command == "run":
-        output_root = arguments.output_root
-        if not output_root.is_absolute():
-            output_root = root / output_root
+        output_root = _resolve_output_root(arguments, root, task_root)
         selectors = Selectors(
             operators=tuple(arguments.operator),
             candidates=tuple(arguments.candidate),
@@ -342,6 +365,7 @@ def main(
                     performance_max_memory_bytes=arguments.max_memory_bytes,
                     performance_unsupported_policy=arguments.unsupported_policy,
                     gpu_lock_timeout_s=arguments.gpu_lock_timeout_s,
+                    task_root=task_root,
                 )
                 print(json.dumps(plan.to_dict(), indent=2, sort_keys=True))
                 return 0
@@ -373,7 +397,10 @@ def main(
                 ):
                     raise ValueError("--resume cannot be combined with selectors or identity overrides")
                 plan, snapshot, environment = build_resume_plan(
-                    root, arguments.resume, output_root=output_root
+                    root,
+                    arguments.resume,
+                    output_root=output_root,
+                    task_root=task_root,
                 )
             else:
                 plan, snapshot, environment = build_execution_plan(
@@ -396,6 +423,7 @@ def main(
                     performance_max_memory_bytes=arguments.max_memory_bytes,
                     performance_unsupported_policy=arguments.unsupported_policy,
                     gpu_lock_timeout_s=arguments.gpu_lock_timeout_s,
+                    task_root=task_root,
                 )
             outcome = execute_plan(
                 plan,
@@ -406,6 +434,7 @@ def main(
                 resume=arguments.resume is not None,
                 fail_fast=arguments.fail_fast,
                 timeout_s=arguments.timeout_s,
+                lock_root=root / ".runtime" / "locks",
             )
         except KeyboardInterrupt:
             print("interrupted by user", file=sys.stderr)
@@ -424,14 +453,18 @@ def main(
             return 2
         print(f"run_id: {outcome.run_id}")
         print(
-            f"correctness: {outcome.passed} passed, {outcome.failed} failed; "
+            f"results: {outcome.passed} passed, {outcome.failed} failed; "
             f"infrastructure failures: {outcome.infrastructure_failures}"
         )
         for path in outcome.evaluation_paths:
             print(f"result: {path}")
         return outcome.exit_code
 
-    registry = FilesystemRegistry(root)
+    registry = (
+        FilesystemRegistry(root)
+        if task_root is None
+        else FilesystemRegistry.for_kda_task(task_root)
+    )
     snapshot = registry.discover()
     if arguments.command == "list":
         return _run_list(

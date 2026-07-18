@@ -39,6 +39,10 @@ class BootstrapContractTest(unittest.TestCase):
             "TRITON_CACHE_DIR",
         ):
             self.assertIn(name, self.script)
+        self.assertIn('RUNTIME="${BENCHMARK_RUNTIME_ROOT:-$ROOT/.runtime}"', self.script)
+        self.assertIn('CACHE_ROOT="${BENCHMARK_CACHE_ROOT:-$RUNTIME/cache}"', self.script)
+        self.assertIn('VENV="$RUNTIME/venv"', self.script)
+        self.assertIn('LOG="$RUNTIME/logs/bootstrap.log"', self.script)
         self.assertIn(".runtime/", (ROOT / ".gitignore").read_text().splitlines())
 
     def test_lock_pins_the_live_rocm_and_source_fingerprints(self):

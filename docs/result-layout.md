@@ -7,6 +7,19 @@ operators/candidates/<operator_id>/<candidate_id>/
 results/<operator_id>/<candidate_id>/<evaluation_id>/
 ```
 
+KDA task mode keeps the same identity mirror while replacing the repository
+source/result roots:
+
+```text
+solution/<candidate_id>/
+bench/<operator_id>/<candidate_id>/<evaluation_id>/
+```
+
+`bench/` is selected automatically when `--task-root` is present. All files,
+schemas, lifecycle rules, resume behavior, and ranking gates below are
+identical; examples use the repository-mode name `results/` as a placeholder
+for either artifact root.
+
 ## Normal evaluation
 
 ```text

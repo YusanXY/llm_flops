@@ -86,6 +86,14 @@ def _suite(repository_root: Path, suite_id: str):
     return suite
 
 
+def _registry(repository_root: Path, task_root: Path | None) -> FilesystemRegistry:
+    """Select the repository or KDA task-native source layout."""
+
+    if task_root is None:
+        return FilesystemRegistry(repository_root)
+    return FilesystemRegistry.for_kda_task(Path(task_root).resolve())
+
+
 def build_dry_run_plan(
     repository_root: Path,
     suite_id: str,
@@ -109,12 +117,13 @@ def build_dry_run_plan(
     performance_max_memory_bytes: int | None = None,
     performance_unsupported_policy: str | None = None,
     gpu_lock_timeout_s: float | None = None,
+    task_root: Path | None = None,
 ):
     """Build an import-free-of-candidates, artifact-free plan."""
 
     root = Path(repository_root).resolve()
     suite = _suite(root, suite_id)
-    snapshot = FilesystemRegistry(root).discover()
+    snapshot = _registry(root, task_root).discover()
     lock = load_lock(root / "requirements" / "benchmark-lock.json")
     fingerprint = planning_fingerprint(lock)
     return (plan_builder or PlanBuilder()).build(
@@ -173,10 +182,11 @@ def build_execution_plan(
     performance_max_memory_bytes: int | None = None,
     performance_unsupported_policy: str | None = None,
     gpu_lock_timeout_s: float | None = None,
+    task_root: Path | None = None,
 ) -> tuple[EvaluationPlan, RegistrySnapshot, Mapping[str, object]]:
     root = Path(repository_root).resolve()
     suite = _suite(root, suite_id)
-    snapshot = FilesystemRegistry(root).discover()
+    snapshot = _registry(root, task_root).discover()
     resolved_mode = mode or suite.mode
     environment, fingerprint = _runtime_environment(
         root, include_cuda=resolved_mode in {"all", "performance"}
@@ -239,10 +249,14 @@ def _resume_selectors(command: Sequence[str]) -> Selectors:
 
 
 def build_resume_plan(
-    repository_root: Path, run_id: str, *, output_root: Path
+    repository_root: Path,
+    run_id: str,
+    *,
+    output_root: Path,
+    task_root: Path | None = None,
 ) -> tuple[EvaluationPlan, RegistrySnapshot, Mapping[str, object]]:
     root = Path(repository_root).resolve()
-    snapshot = FilesystemRegistry(root).discover()
+    snapshot = _registry(root, task_root).discover()
     states = ResumeReader(output_root).for_run(run_id)
     jobs: list[EvaluationJob] = []
     suite_ids = {state.manifest.suite_id for state in states}
@@ -928,6 +942,7 @@ def execute_plan(
     fail_fast: bool = False,
     timeout_s: float | None = None,
     controller: WorkerController | None = None,
+    lock_root: Path | None = None,
 ) -> RunOutcome:
     writer = ArtifactWriter(output_root)
     grouped: dict[object, list[EvaluationJob]] = {}
@@ -1006,9 +1021,13 @@ def execute_plan(
             gpu_lock = None
             if cuda_devices and job.mode in {"all", "performance"}:
                 identity = resolve_gpu_identity(0, allow_torch_fallback=True)
-                repository_root = job.reference.root.parents[2]
                 gpu_lock = GpuLock(
-                    repository_root / ".runtime" / "locks", identity,
+                    (
+                        Path(lock_root).resolve()
+                        if lock_root is not None
+                        else job.reference.root.parents[2] / ".runtime" / "locks"
+                    ),
+                    identity,
                     run_id=job.identity.run_id,
                     timeout_s=job.resolved_config.gpu_lock_timeout_s,
                 ).acquire()

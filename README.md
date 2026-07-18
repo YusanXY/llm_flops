@@ -31,6 +31,28 @@ large GPU dependencies. Both launchers discard inherited `PYTHONPATH` and
 explicitly select the llm_flops, SGLang, and AITER source trees. See the
 [MI300X runtime guide](docs/mi300x.md).
 
+## KDA-Pilot task mode
+
+The recommended Agent integration evaluates sources directly in one
+`KDA-Pilot/llm/<task>` directory:
+
+```text
+baseline/                         immutable reference contract
+solution/<candidate_id>/          one independent candidate version
+bench/<operator>/<candidate>/<evaluation>/
+```
+
+From the task directory, one command performs static validation, correctness,
+and gated performance, then publishes results under `bench/`:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 ../../../llm_flops/kda-bench.sh . <candidate_id>
+```
+
+No source is staged into this repository. Agents must not modify `baseline/`,
+the environment lock, cases, comparators, tolerances, timers, or gates. See the
+[KDA-Pilot integration contract](docs/kda-pilot-integration.md).
+
 ## Five-minute CPU check
 
 `example_cpu_add` exercises discovery, Controller/Worker isolation,
@@ -50,9 +72,9 @@ without importing candidate code:
 ./bench.sh summarize results/OPERATOR/CANDIDATE/EVALUATION
 ```
 
-## Reference and candidate
+## Reference and candidate layouts
 
-The minimum source layout is:
+Repository mode remains available for framework development and regression:
 
 ```text
 operators/references/<operator_id>/
@@ -68,6 +90,18 @@ isolated inputs, output normalization/comparison, and an optional cost model.
 `implementation.py` exports the timed callable. A candidate may optionally add
 `candidate.yaml`. Candidate IDs only need to be unique under one operator and
 path-safe; the task/timestamp/hash form is a recommendation, not a requirement.
+
+KDA task mode uses the same contract files without copying them at benchmark
+time:
+
+```text
+baseline/{operator.yaml,spec.py,implementation.py,README.md}
+solution/<candidate_id>/implementation.py
+```
+
+Use `--task-root /path/to/task` with `list`, `validate`, `run`, `summarize`, or
+`compare`. If `--output-root` is omitted, task-mode results go to
+`<task-root>/bench`; repository mode still defaults to `results/`.
 
 See [the operator contract](docs/operator-contract.md) and
 [candidate guide](docs/candidate-guide.md) before adding an implementation.
@@ -110,7 +144,8 @@ Resume and compare only formal engine evaluations:
 
 ## Read results
 
-Normal evaluations use:
+Repository-mode evaluations use `results/`; KDA task mode uses `bench/`. Both
+retain the same identity mirror and artifact schema:
 
 ```text
 results/<operator_id>/<candidate_id>/<evaluation_id>/
@@ -194,6 +229,7 @@ per-operator settings.
 
 - [Documentation index](docs/index.md)
 - [MI300X/ROCm runtime](docs/mi300x.md)
+- [KDA-Pilot task-native integration](docs/kda-pilot-integration.md)
 - [Getting started](docs/getting-started.md)
 - [CLI](docs/cli.md)
 - [Architecture](docs/architecture.md) and [implementation](docs/implementation.md)

@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-RUNTIME="$ROOT/.runtime"
+RUNTIME="${BENCHMARK_RUNTIME_ROOT:-$ROOT/.runtime}"
+CACHE_ROOT="${BENCHMARK_CACHE_ROOT:-$RUNTIME/cache}"
 VENV="$RUNTIME/venv"
 LOG="$RUNTIME/logs/bootstrap.log"
 LOCK="$ROOT/requirements/benchmark-lock.json"
@@ -32,12 +33,12 @@ if [[ ! -x "$PYTHON" ]]; then
 fi
 
 export PYTHONPATH="$ROOT/src:$SGLANG_ROOT/python:$AITER_ROOT"
-export UV_CACHE_DIR="$RUNTIME/cache/uv"
-export TORCH_EXTENSIONS_DIR="$RUNTIME/cache/torch_extensions"
-export FLASHINFER_WORKSPACE_BASE="$RUNTIME/cache/flashinfer"
-export XDG_CACHE_HOME="$RUNTIME/cache/xdg"
-export TRITON_CACHE_DIR="$RUNTIME/cache/triton"
-export AITER_CONFIG_DIR="$RUNTIME/cache/aiter"
+export UV_CACHE_DIR="$CACHE_ROOT/uv"
+export TORCH_EXTENSIONS_DIR="$CACHE_ROOT/torch_extensions"
+export FLASHINFER_WORKSPACE_BASE="$CACHE_ROOT/flashinfer"
+export XDG_CACHE_HOME="$CACHE_ROOT/xdg"
+export TRITON_CACHE_DIR="$CACHE_ROOT/triton"
+export AITER_CONFIG_DIR="$CACHE_ROOT/aiter"
 export AITER_META_DIR="$AITER_ROOT"
 # SGLang's fused clamp epilogue is CUDA-only. AITER does not consume this
 # setting, while the independent HIP Triton oracle must explicitly disable it.
