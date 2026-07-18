@@ -1,0 +1,11 @@
+schema_version: 1
+suite_id: kda_task
+operators:
+  include: ["*"]
+  exclude: []
+cases:
+  tags: [smoke]
+mode: all
+correctness:
+  seeds: [0]
+performance: {}

@@ -14,11 +14,12 @@ class BootstrapContractTest(unittest.TestCase):
     def test_is_strict_and_repository_relative(self):
         self.assertIn("set -euo pipefail", self.script)
         self.assertIn("BASH_SOURCE[0]", self.script)
-        self.assertIn('unset PYTHONPATH', self.script)
+        self.assertIn('export PYTHONPATH="$ROOT/src"', self.script)
 
     def test_builds_an_ignored_local_runtime(self):
-        self.assertIn(".runtime/venv", self.script)
-        self.assertIn(".runtime/logs/bootstrap.log", self.script)
+        self.assertIn('RUNTIME="${BENCHMARK_RUNTIME_ROOT:-$ROOT/.runtime}"', self.script)
+        self.assertIn('VENV="$RUNTIME/venv"', self.script)
+        self.assertIn('LOG="$RUNTIME/logs/bootstrap.log"', self.script)
         self.assertIn("UV_CACHE_DIR", self.script)
         self.assertIn(".runtime/", (ROOT / ".gitignore").read_text().splitlines())
 

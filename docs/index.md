@@ -5,6 +5,9 @@ The root [README](../README.md) contains the shortest runnable example.
 
 ## Use the engine
 
+- [KDA-Pilot integration](kda-pilot-integration.md): task-native baseline,
+  versioned solutions, one-command benchmark, runtime isolation, and `bench/`
+  artifacts. Agents should read this first when working inside KDA-Pilot.
 - [Getting started](getting-started.md): install, discover, dry-run, execute, resume.
 - [CLI](cli.md): commands, selectors, precedence, and exit codes.
 - [Troubleshooting](troubleshooting.md): JIT, timeout, OOM, locks, noise, and artifacts.
@@ -29,4 +32,5 @@ The root [README](../README.md) contains the shortest runnable example.
 - [Development](development.md) and [contributing](../CONTRIBUTING.md).
 
 Operator-specific shapes, layouts, tolerances, cost models, and commands live in
-`operators/references/<operator_id>/README.md`.
+`baseline/README.md` for KDA tasks and
+`operators/references/<operator_id>/README.md` in repository mode.

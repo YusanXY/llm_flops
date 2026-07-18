@@ -70,7 +70,23 @@ class FilesystemRegistry:
         self.repository_root = Path(repository_root).resolve()
         self.references_root = self.repository_root / "operators" / "references"
         self.candidates_root = self.repository_root / "operators" / "candidates"
+        self._kda_task_layout = False
         self._snapshot: RegistrySnapshot | None = None
+
+    @classmethod
+    def for_kda_task(cls, task_root: Path) -> "FilesystemRegistry":
+        """Discover one KDA task without copying sources into this repository.
+
+        ``baseline/`` is the reference root and every immediate directory below
+        ``solution/`` is an independent candidate version.  Generated artifacts
+        are deliberately outside the registry and belong under ``bench/``.
+        """
+
+        registry = cls(task_root)
+        registry.references_root = registry.repository_root / "baseline"
+        registry.candidates_root = registry.repository_root / "solution"
+        registry._kda_task_layout = True
+        return registry
 
     def discover(self) -> RegistrySnapshot:
         references: dict[str, ImplementationSpec] = {}
@@ -82,14 +98,55 @@ class FilesystemRegistry:
         discovered_operator_ids: set[str] = set()
         declared_references: dict[str, Path] = {}
 
-        reference_paths = _directories(self.references_root)
-        candidate_operator_paths = _directories(self.candidates_root)
+        task_operator_id: str | None = None
+        if self._kda_task_layout:
+            reference_paths = (
+                [self.references_root]
+                if self.references_root.exists() or self.references_root.is_symlink()
+                else []
+            )
+            candidate_operator_paths = (
+                [self.candidates_root]
+                if self.candidates_root.exists() or self.candidates_root.is_symlink()
+                else []
+            )
+            if not reference_paths:
+                issues.append(
+                    _issue(
+                        "kda.missing_baseline",
+                        self.references_root,
+                        "baseline",
+                        "KDA task must contain a baseline directory",
+                    )
+                )
+            if not candidate_operator_paths:
+                issues.append(
+                    _issue(
+                        "kda.missing_solution",
+                        self.candidates_root,
+                        "solution",
+                        "KDA task must contain a solution directory",
+                    )
+                )
+            for filename in ("implementation.py", "candidate.yaml"):
+                flat_path = self.candidates_root / filename
+                if flat_path.exists() or flat_path.is_symlink():
+                    issues.append(
+                        _issue(
+                            "kda.flat_solution",
+                            flat_path,
+                            "solution",
+                            "candidate files must live under solution/<candidate_id>/",
+                        )
+                    )
+        else:
+            reference_paths = _directories(self.references_root)
+            candidate_operator_paths = _directories(self.candidates_root)
         issues.extend(_case_collisions(reference_paths, "operator_id"))
         issues.extend(_case_collisions(candidate_operator_paths, "operator_id"))
 
         for reference_root in reference_paths:
             operator_id = reference_root.name
-            discovered_operator_ids.add(operator_id)
             before = len(issues)
             if reference_root.is_symlink():
                 issues.append(
@@ -101,13 +158,15 @@ class FilesystemRegistry:
                     )
                 )
                 continue
-            try:
-                validate_operator_id(operator_id)
-            except IdentifierError as error:
-                issues.append(
-                    _issue("id.operator", reference_root, "operator_id", str(error))
-                )
-                continue
+            if not self._kda_task_layout:
+                discovered_operator_ids.add(operator_id)
+                try:
+                    validate_operator_id(operator_id)
+                except IdentifierError as error:
+                    issues.append(
+                        _issue("id.operator", reference_root, "operator_id", str(error))
+                    )
+                    continue
 
             manifest_path = reference_root / "operator.yaml"
             if manifest_path.is_symlink():
@@ -125,6 +184,17 @@ class FilesystemRegistry:
             except ManifestValidationError as error:
                 issues.append(error.as_issue())
                 continue
+            if self._kda_task_layout:
+                operator_id = manifest.operator_id
+                task_operator_id = operator_id
+                discovered_operator_ids.add(operator_id)
+                try:
+                    validate_operator_id(operator_id)
+                except IdentifierError as error:
+                    issues.append(
+                        _issue("id.operator", manifest_path, "operator_id", str(error))
+                    )
+                    continue
             previous_reference = declared_references.get(manifest.operator_id)
             if previous_reference is not None:
                 issues.append(
@@ -138,7 +208,7 @@ class FilesystemRegistry:
                 )
             else:
                 declared_references[manifest.operator_id] = manifest_path
-            if manifest.operator_id != operator_id:
+            if not self._kda_task_layout and manifest.operator_id != operator_id:
                 issues.append(
                     _issue(
                         "operator.id_mismatch",
@@ -197,7 +267,7 @@ class FilesystemRegistry:
             )
 
         for operator_root in candidate_operator_paths:
-            operator_id = operator_root.name
+            operator_id = task_operator_id or operator_root.name
             discovered_operator_ids.add(operator_id)
             if operator_root.is_symlink():
                 issues.append(
@@ -205,7 +275,11 @@ class FilesystemRegistry:
                         "registry.symlink",
                         operator_root,
                         "operator_id",
-                        "candidate operator directory must not be a symlink",
+                        (
+                            "solution directory must not be a symlink"
+                            if self._kda_task_layout
+                            else "candidate operator directory must not be a symlink"
+                        ),
                     )
                 )
                 continue

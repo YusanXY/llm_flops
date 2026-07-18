@@ -2,17 +2,18 @@
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-RUNTIME="$ROOT/.runtime"
-VENV="$ROOT/.runtime/venv"
-LOG="$ROOT/.runtime/logs/bootstrap.log"
+RUNTIME="${BENCHMARK_RUNTIME_ROOT:-$ROOT/.runtime}"
+CACHE_ROOT="${BENCHMARK_CACHE_ROOT:-$RUNTIME/cache}"
+VENV="$RUNTIME/venv"
+LOG="$RUNTIME/logs/bootstrap.log"
 LOCK="$ROOT/requirements/benchmark-lock.json"
-MARKER="$ROOT/.runtime/installed.lock"
+MARKER="$RUNTIME/installed.lock"
 PYTHON="${PYTHON:-/usr/bin/python3.12}"
 
-unset PYTHONPATH
-export UV_CACHE_DIR="$ROOT/.runtime/cache/uv"
-export TORCH_EXTENSIONS_DIR="$ROOT/.runtime/cache/torch_extensions"
-export FLASHINFER_WORKSPACE_BASE="$ROOT/.runtime/cache/flashinfer"
+export PYTHONPATH="$ROOT/src"
+export UV_CACHE_DIR="$CACHE_ROOT/uv"
+export TORCH_EXTENSIONS_DIR="$CACHE_ROOT/torch_extensions"
+export FLASHINFER_WORKSPACE_BASE="$CACHE_ROOT/flashinfer"
 
 mkdir -p "$RUNTIME/logs" "$UV_CACHE_DIR" "$TORCH_EXTENSIONS_DIR" \
   "$FLASHINFER_WORKSPACE_BASE"
