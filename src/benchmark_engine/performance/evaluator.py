@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import gc
 import math
 import time
+from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
@@ -162,14 +164,21 @@ class PerformanceEvaluator:
         inputs: InputBundle,
         config: PerformanceConfig,
     ) -> _PreparedImplementation:
-        latest: list[object] = [None]
+        # Keep every asynchronous output in the current inner-iteration group
+        # alive until the timer closes that group.  Dropping the previous
+        # output at each Python call can release storage still used by a GPU
+        # kernel (AITER fused MoE is one concrete example).  The bounded deque
+        # drops the previous group's outputs only after its end event has
+        # synchronized.
+        latest: deque[object] = deque(maxlen=config.inner_iterations)
 
         def invoke() -> object:
-            latest[0] = fn(*inputs.args, **inputs.kwargs)
-            return latest[0]
+            output = fn(*inputs.args, **inputs.kwargs)
+            latest.append(output)
+            return output
 
         def synchronize() -> None:
-            self._synchronizer(latest[0], inputs)
+            self._synchronizer(latest[-1] if latest else None, inputs)
 
         sampling = TimerConfig(config.samples, config.inner_iterations)
         timer = self._timer_factory(config.requested_timer, synchronize)
@@ -268,28 +277,40 @@ class PerformanceEvaluator:
         schedule = ("reference", "candidate", "candidate", "reference")
         peak_allocated: int | None = None
         peak_reserved: int | None = None
-        while any(len(values) < prepared.config.samples for values in buckets.values()):
-            for role in schedule:
-                bucket = buckets[role]
-                if len(bucket) >= prepared.config.samples:
-                    continue
-                implementation = by_role[role]
-                memory_tracking = role == "candidate" and prepared.track_cuda_memory and self._reset_peak_memory()
-                one = implementation.timer.sample(
-                    implementation.invoke,
-                    TimerConfig(1, implementation.sampling.inner_iterations),
-                )[0]
-                if memory_tracking:
-                    allocated, reserved = self._read_peak_memory()
-                    if allocated is not None:
-                        peak_allocated = allocated if peak_allocated is None else max(peak_allocated, allocated)
-                    if reserved is not None:
-                        peak_reserved = reserved if peak_reserved is None else max(peak_reserved, reserved)
-                bucket.append(RawSample(
-                    len(bucket), one.inner_iterations, one.elapsed_ms,
-                    one.per_call_ms, order_index,
-                ))
-                order_index += 1
+        gc_was_enabled = gc.isenabled()
+        if gc_was_enabled:
+            # Cyclic collection can pause Python between asynchronous launches.
+            # GPU events then include an artificial idle gap even though no
+            # kernel work changed. Collect before the window and restore GC
+            # immediately after all steady-state samples.
+            gc.collect()
+            gc.disable()
+        try:
+            while any(len(values) < prepared.config.samples for values in buckets.values()):
+                for role in schedule:
+                    bucket = buckets[role]
+                    if len(bucket) >= prepared.config.samples:
+                        continue
+                    implementation = by_role[role]
+                    memory_tracking = role == "candidate" and prepared.track_cuda_memory and self._reset_peak_memory()
+                    one = implementation.timer.sample(
+                        implementation.invoke,
+                        TimerConfig(1, implementation.sampling.inner_iterations),
+                    )[0]
+                    if memory_tracking:
+                        allocated, reserved = self._read_peak_memory()
+                        if allocated is not None:
+                            peak_allocated = allocated if peak_allocated is None else max(peak_allocated, allocated)
+                        if reserved is not None:
+                            peak_reserved = reserved if peak_reserved is None else max(peak_reserved, reserved)
+                    bucket.append(RawSample(
+                        len(bucket), one.inner_iterations, one.elapsed_ms,
+                        one.per_call_ms, order_index,
+                    ))
+                    order_index += 1
+        finally:
+            if gc_was_enabled:
+                gc.enable()
         reference_measurement = self._measurement(
             prepared.reference, prepared.config, tuple(buckets["reference"])
         )

@@ -1,0 +1,7 @@
+schema_version: 1
+operator_id: deepseek_v4_q_rmsnorm_wqb
+candidate_id: reference_control__20260724T080000Z__942a8f01
+entrypoint: implementation:operator
+framework: sglang-aiter
+metadata:
+  purpose: reference-control

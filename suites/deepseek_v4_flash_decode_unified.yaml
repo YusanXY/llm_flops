@@ -1,0 +1,19 @@
+schema_version: 1
+suite_id: deepseek_v4_flash_decode_unified
+operators:
+  include:
+    - "deepseek_v4_q_rmsnorm_wqb"
+    - "deepseek_v4_wo_a_grouped_bf16"
+    - "deepseek_v4_aiter_fp8_linear"
+    - "deepseek_v4_aiter_fp8_fused_moe"
+  exclude: []
+candidates:
+  include: ["reference_control__*"]
+cases:
+  tags: [deepseek_v4_flash_decode_unified]
+mode: all
+correctness:
+  seeds: [0]
+performance:
+  warmup: 20
+  samples: 100

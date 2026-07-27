@@ -24,5 +24,7 @@ export FLASHINFER_WORKSPACE_BASE="$ROOT/.runtime/cache/flashinfer"
 export XDG_CACHE_HOME="$ROOT/.runtime/cache/xdg"
 export TRITON_CACHE_DIR="$ROOT/.runtime/cache/triton"
 export AITER_CONFIG_DIR="$ROOT/.runtime/cache/aiter"
+export AITER_META_DIR="$AITER_ROOT"
+export SGLANG_OPT_SWIGLU_CLAMP_FUSION=0
 
 exec "$VENV/bin/python" -m benchmark_engine "$@"

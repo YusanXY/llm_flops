@@ -21,7 +21,10 @@
       "root_env": "AITER_ROOT",
       "commit": "6d0304e8ce88bddef4ec875bdd844804fd631089",
       "dirty": true,
-      "diff_sha256": "23f8dba6cd44e09543dabc37e3b0aac220167b00bfd0afa874892d799ab97806"
+      "diff_sha256": "23f8dba6cd44e09543dabc37e3b0aac220167b00bfd0afa874892d799ab97806",
+      "submodules": {
+        "3rdparty/composable_kernel": "af7118e342580ecd3f71edce7b1d0ba465012ecf"
+      }
     }
   },
   "packages": {

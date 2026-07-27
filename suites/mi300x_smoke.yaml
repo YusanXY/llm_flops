@@ -9,6 +9,9 @@ operators:
     - "deepseek_v4_aiter_c4_paged_mqa_logits"
     - "deepseek_v4_tilelang_sparse_attention"
     - "deepseek_v4_aiter_fp8_fused_moe"
+    - "deepseek_v4_aiter_fp8_linear"
+    - "deepseek_v4_q_rmsnorm_wqb"
+    - "deepseek_v4_wo_a_grouped_bf16"
   exclude: []
 candidates:
   include: ["reference_control__*"]

@@ -50,9 +50,9 @@ class DeepSeekV4FlashMi300xContractTests(unittest.TestCase):
             "deepseek_v4_aiter_block_fp8_gemm": 4,
             "deepseek_v4_fused_qk_norm_rope_store": 4,
             "deepseek_v4_c4_c128_compressor": 8,
-            "deepseek_v4_aiter_c4_paged_mqa_logits": 4,
-            "deepseek_v4_tilelang_sparse_attention": 10,
-            "deepseek_v4_aiter_fp8_fused_moe": 4,
+            "deepseek_v4_aiter_c4_paged_mqa_logits": 7,
+            "deepseek_v4_tilelang_sparse_attention": 16,
+            "deepseek_v4_aiter_fp8_fused_moe": 8,
         }
         for operator_id in HIGH_PRIORITY:
             with self.subTest(operator_id=operator_id):
@@ -62,9 +62,7 @@ class DeepSeekV4FlashMi300xContractTests(unittest.TestCase):
                 phases = Counter(case.symbols["phase"] for case in cases)
                 self.assertEqual(set(phases), {"prefill", "decode"})
                 self.assertTrue(any("oracle" in case.tags for case in cases))
-                self.assertTrue(
-                    any("performance_only" in case.tags for case in cases)
-                )
+                self.assertTrue(any("representative" in case.tags for case in cases))
                 for case in cases:
                     cost = spec.cost_model(case)
                     self.assertGreater(cost["flops"], 0)
@@ -90,6 +88,99 @@ class DeepSeekV4FlashMi300xContractTests(unittest.TestCase):
         ]
         self.assertEqual(moe.performance.timer, "cuda_event")
         self.assertEqual(moe.performance.graph_mode, "disabled")
+        sparse = snapshot.operator_manifests[
+            "deepseek_v4_tilelang_sparse_attention"
+        ]
+        self.assertEqual(sparse.performance.timer, "cuda_event")
+        self.assertEqual(sparse.performance.graph_mode, "disabled")
+
+    def test_flash_prefill_unified_suite_has_seven_logical_rows(self):
+        path = ROOT / "suites" / "deepseek_v4_flash_prefill_unified.yaml"
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            tuple(data["operators"]["include"]),
+            (
+                "deepseek_v4_q_rmsnorm_wqb",
+                "deepseek_v4_wo_a_grouped_bf16",
+                "deepseek_v4_aiter_fp8_linear",
+                "deepseek_v4_aiter_c4_paged_mqa_logits",
+                "deepseek_v4_tilelang_sparse_attention",
+                "deepseek_v4_aiter_fp8_fused_moe",
+            ),
+        )
+        self.assertEqual(
+            data["cases"]["tags"],
+            ["deepseek_v4_flash_prefill_unified"],
+        )
+        self.assertEqual(data["performance"]["warmup"], 20)
+        self.assertEqual(data["performance"]["samples"], 100)
+        self.assertNotIn("inner_iterations", data["performance"])
+
+        expected = {
+            "deepseek_v4_q_rmsnorm_wqb": 3,
+            "deepseek_v4_wo_a_grouped_bf16": 3,
+            "deepseek_v4_aiter_fp8_linear": 6,
+            "deepseek_v4_aiter_c4_paged_mqa_logits": 3,
+            "deepseek_v4_tilelang_sparse_attention": 6,
+            "deepseek_v4_aiter_fp8_fused_moe": 3,
+        }
+        for operator_id, count in expected.items():
+            cases = [
+                case
+                for case in load_spec(operator_id).cases()
+                if "deepseek_v4_flash_prefill_unified" in case.tags
+            ]
+            self.assertEqual(len(cases), count)
+            self.assertEqual(
+                {case.symbols["model_input"] for case in cases},
+                {1024, 2048, 4096},
+            )
+            self.assertEqual(
+                {case.symbols["raw_context"] for case in cases},
+                {65536},
+            )
+
+    def test_flash_decode_unified_suite_has_one_common_configuration(self):
+        path = ROOT / "suites" / "deepseek_v4_flash_decode_unified.yaml"
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            tuple(data["operators"]["include"]),
+            (
+                "deepseek_v4_q_rmsnorm_wqb",
+                "deepseek_v4_wo_a_grouped_bf16",
+                "deepseek_v4_aiter_fp8_linear",
+                "deepseek_v4_aiter_fp8_fused_moe",
+            ),
+        )
+        self.assertEqual(
+            data["cases"]["tags"],
+            ["deepseek_v4_flash_decode_unified"],
+        )
+        self.assertEqual(data["performance"]["warmup"], 20)
+        self.assertEqual(data["performance"]["samples"], 100)
+        self.assertNotIn("inner_iterations", data["performance"])
+
+        expected = {
+            "deepseek_v4_q_rmsnorm_wqb": 2,
+            "deepseek_v4_wo_a_grouped_bf16": 2,
+            "deepseek_v4_aiter_fp8_linear": 6,
+            "deepseek_v4_aiter_fp8_fused_moe": 2,
+        }
+        for operator_id, count in expected.items():
+            cases = [
+                case
+                for case in load_spec(operator_id).cases()
+                if "deepseek_v4_flash_decode_unified" in case.tags
+            ]
+            self.assertEqual(len(cases), count)
+            self.assertEqual(
+                {case.symbols["model_input"] for case in cases},
+                {16, 32},
+            )
+            self.assertEqual(
+                {case.symbols["raw_context"] for case in cases},
+                {65536},
+            )
 
     def test_attention_ratios_and_full_moe_geometry_match_v4_flash(self):
         attention = load_spec("deepseek_v4_tilelang_sparse_attention")
@@ -120,6 +211,27 @@ class DeepSeekV4FlashMi300xContractTests(unittest.TestCase):
             source = (ROOT / filename).read_text(encoding="utf-8")
             self.assertIn("AITER_CONFIG_DIR", source)
             self.assertIn(".runtime/cache/aiter", source.replace('"$RUNTIME', '"$ROOT/.runtime'))
+        bootstrap = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
+        self.assertIn('export AITER_META_DIR="$AITER_ROOT"', bootstrap)
+        self.assertIn("SGLANG_OPT_SWIGLU_CLAMP_FUSION=0", bootstrap)
+
+    def test_moe_calls_aiter_fused_kernel_without_sglang_runner(self):
+        reference = (
+            ROOT
+            / "operators"
+            / "references"
+            / "deepseek_v4_aiter_fp8_fused_moe"
+            / "implementation.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("from aiter.fused_moe import fused_moe", reference)
+        self.assertIn("quant_type=quant_type.per_128x128", reference)
+        self.assertIn("gate_mode=gate_mode.INTERLEAVE.value", reference)
+        self.assertIn("@lru_cache(maxsize=1)", reference)
+        self.assertNotIn("MoeRunner", reference)
+        self.assertNotIn("StandardDispatchOutput", reference)
+        self.assertNotIn("AiterMoeQuantInfo", reference)
+        self.assertNotIn("_triton_fallback", reference)
+        self.assertNotIn("LLM_FLOPS_DSV4_USE_AITER_MOE", reference)
 
 
 if __name__ == "__main__":

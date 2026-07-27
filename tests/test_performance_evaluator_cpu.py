@@ -1,8 +1,11 @@
+import gc
 import unittest
+import weakref
 
 from benchmark_engine.correctness import InputBundle, clone_input_bundle
 from benchmark_engine.models import CaseSpec
 from benchmark_engine.performance import PerformanceConfig, PerformanceEvaluator
+from benchmark_engine.performance.timers import RawSample, TimerSelection
 
 
 class StepClock:
@@ -27,6 +30,81 @@ class Spec:
 
 
 class PerformanceEvaluatorCpuTests(unittest.TestCase):
+    def test_cyclic_gc_is_disabled_only_during_steady_sampling(self):
+        states = []
+        original_state = gc.isenabled()
+        gc.enable()
+        try:
+            evaluator = PerformanceEvaluator(
+                clock=StepClock(), synchronizer=lambda output, inputs: None
+            )
+
+            def operator(left, right):
+                states.append(gc.isenabled())
+                return left
+
+            evaluator.evaluate(
+                spec=Spec(),
+                reference=operator,
+                candidate=operator,
+                case=CaseSpec("case", {}, 0, frozenset()),
+                config=PerformanceConfig(
+                    requested_timer="wall_clock",
+                    warmup=0,
+                    samples=1,
+                    inner_iterations=1,
+                    minimum_stable_samples=1,
+                    maximum_cv=1.0,
+                ),
+            )
+            self.assertEqual(states, [True, True, False, False])
+            self.assertTrue(gc.isenabled())
+        finally:
+            if original_state:
+                gc.enable()
+            else:
+                gc.disable()
+
+    def test_inner_iteration_outputs_remain_alive_until_sample_boundary(self):
+        class Output:
+            pass
+
+        class LifetimeTimer:
+            selection = TimerSelection("cuda_event", "cuda_event")
+
+            def prepare(self, fn, config):
+                return 0.0
+
+            def sample(self, fn, config):
+                references = []
+                for _ in range(config.inner_iterations):
+                    output = fn()
+                    references.append(weakref.ref(output))
+                    del output
+                if not all(reference() is not None for reference in references):
+                    raise AssertionError("an inner-iteration output was released early")
+                return (RawSample(0, config.inner_iterations, 1.0, 0.25),)
+
+        evaluator = PerformanceEvaluator(
+            synchronizer=lambda output, inputs: None,
+            timer_factory=lambda requested, sync: LifetimeTimer(),
+        )
+        result = evaluator.evaluate(
+            spec=Spec(),
+            reference=lambda a, b: Output(),
+            candidate=lambda a, b: Output(),
+            case=CaseSpec("case", {}, 0, frozenset()),
+            config=PerformanceConfig(
+                requested_timer="cuda_event",
+                warmup=0,
+                samples=1,
+                inner_iterations=4,
+                minimum_stable_samples=1,
+                maximum_cv=1.0,
+            ),
+        )
+        self.assertEqual(result.status, "pass")
+
     def test_candidate_peak_memory_and_optional_workspace_are_outside_timing(self):
         class WorkspaceSpec(Spec):
             def workspace_bytes(self, case): return 4096

@@ -38,6 +38,10 @@ export FLASHINFER_WORKSPACE_BASE="$RUNTIME/cache/flashinfer"
 export XDG_CACHE_HOME="$RUNTIME/cache/xdg"
 export TRITON_CACHE_DIR="$RUNTIME/cache/triton"
 export AITER_CONFIG_DIR="$RUNTIME/cache/aiter"
+export AITER_META_DIR="$AITER_ROOT"
+# SGLang's fused clamp epilogue is CUDA-only. AITER does not consume this
+# setting, while the independent HIP Triton oracle must explicitly disable it.
+export SGLANG_OPT_SWIGLU_CLAMP_FUSION=0
 
 mkdir -p "$RUNTIME/logs" "$UV_CACHE_DIR" "$TORCH_EXTENSIONS_DIR" \
   "$FLASHINFER_WORKSPACE_BASE" "$XDG_CACHE_HOME" "$TRITON_CACHE_DIR" \

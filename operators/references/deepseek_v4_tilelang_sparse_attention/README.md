@@ -14,6 +14,10 @@ translated physical indices, valid lengths, compression ratio, and attention
 sink. Cache/page/index state is observed and must remain unchanged. Small cases
 use an independent PyTorch gather-softmax-value oracle.
 
+Performance uses HIP events with graph capture disabled. The indexed
+cache-attention path is not graph-state invariant on this pinned build; direct
+launch timing avoids measuring an invalid or alternating captured state.
+
 Source evidence:
 
 - `python/sglang/srt/layers/attention/hip_flash_mla.py`

@@ -94,11 +94,20 @@ def _source_state(source: dict[str, Any]) -> dict[str, object]:
             if diff.returncode == 0
             else None
         )
+    submodules: dict[str, str | None] = {}
+    for relative in source.get("submodules", {}):
+        submodule_root = (root / relative).resolve()
+        top_level = _run_git(submodule_root, "rev-parse", "--show-toplevel")
+        if top_level is None or Path(top_level).resolve() != submodule_root:
+            submodules[relative] = None
+        else:
+            submodules[relative] = _run_git(submodule_root, "rev-parse", "HEAD")
     return {
         "commit": commit,
         "dirty": bool(status) if status is not None else None,
         "diff_sha256": diff_sha256,
         "root_env": root_env,
+        "submodules": submodules,
     }
 
 
@@ -236,6 +245,13 @@ def validate_environment(lock: dict[str, Any], observed: dict[str, Any]) -> list
                 f"source {name} dirty mismatch: expected {expected['dirty']}, "
                 f"observed {actual.get('dirty')}"
             )
+        for path, commit in expected.get("submodules", {}).items():
+            actual_commit = actual.get("submodules", {}).get(path)
+            if actual_commit != commit:
+                errors.append(
+                    f"source {name} submodule {path} mismatch: "
+                    f"expected {commit}, observed {actual_commit}"
+                )
 
     for symbol in lock.get("required_symbols", ()):
         if not observed.get("symbols", {}).get(symbol, False):

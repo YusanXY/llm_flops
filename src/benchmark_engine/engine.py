@@ -994,7 +994,9 @@ def execute_plan(
         )
         build = None if candidate_manifest is None else candidate_manifest.build
         limits = StageTimeouts(
-            import_s=60,
+            # ROCm operator imports may trigger first-use Triton/TileLang cache
+            # discovery and occasionally exceed one minute on shared storage.
+            import_s=300,
             build_s=float(build.timeout_s if build is not None else 600),
             correctness_s=float(timeout_s or job.case.timeout_s or 300),
             performance_s=float(job.resolved_config.performance_timeout_s),

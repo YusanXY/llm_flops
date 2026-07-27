@@ -1,11 +1,11 @@
 schema_version: 1
 operator_id: deepseek_v4_aiter_fp8_fused_moe
 contract_version: 1
-description: DeepSeek V4 Flash routed-expert block-FP8 fused MoE through the stable SGLang Triton path with an opt-in AITER diagnostic path
+description: DeepSeek V4 Flash routed-expert block-FP8 fused MoE through the AITER kernel selected by SGLang
 reference_entrypoint: implementation:operator
 spec_entrypoint: spec:SPEC
 device_types: [cuda]
-tags: [deepseek_v4_flash, rocm, gfx942, aiter, triton_fallback, fp8, moe, high_priority]
+tags: [deepseek_v4_flash, rocm, gfx942, sglang, aiter, fp8, moe, high_priority]
 correctness:
   default_comparator: floating
   rtol: 0.15
@@ -18,7 +18,9 @@ performance:
   graph_mode: disabled
   warmup: 5
   samples: 30
-  inner_iterations: 20
+  # AITER fused_moe reuses internal workspace and is not safely re-entrant
+  # across a timer's retained back-to-back inner calls. Use independent samples.
+  inner_iterations: 1
   timeout_s: 2400
   regression_threshold_pct: 5.0
   max_cv: 0.15

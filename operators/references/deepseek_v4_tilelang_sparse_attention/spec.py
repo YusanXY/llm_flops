@@ -19,6 +19,9 @@ ROPE_DIM = 64
 SWA_TOKENS = 128
 TOKEN_BYTES = 584
 VALUE_BYTES = 576
+PREFILL_M = (1024, 2048, 4096)
+PROFILE = "fp8_block_gfx942"
+UNIFIED_TAG = "deepseek_v4_flash_prefill_unified"
 
 
 def _padded_cache(torch, blocks, block_size, device):
@@ -240,6 +243,11 @@ class DeepSeekV4TilelangSparseAttentionSpec:
                         "queries": 1,
                         "raw_context": 65536,
                         "compression_ratio": 4,
+                        "model_input": 16,
+                        "quant_profile": PROFILE,
+                        "projection_adapter_id": (
+                            "sparse_decode_attention_c4"
+                        ),
                     },
                     4512,
                     frozenset(
@@ -248,6 +256,7 @@ class DeepSeekV4TilelangSparseAttentionSpec:
                             "performance_only",
                             "c4",
                             "deepseek_v4_decode",
+                            "deepseek_v4_flash_decode_unified",
                         }
                     ),
                     2400,
@@ -260,6 +269,11 @@ class DeepSeekV4TilelangSparseAttentionSpec:
                         "queries": 1,
                         "raw_context": 65536,
                         "compression_ratio": 128,
+                        "model_input": 16,
+                        "quant_profile": PROFILE,
+                        "projection_adapter_id": (
+                            "sparse_decode_attention_c128"
+                        ),
                     },
                     4513,
                     frozenset(
@@ -268,12 +282,42 @@ class DeepSeekV4TilelangSparseAttentionSpec:
                             "performance_only",
                             "c128",
                             "deepseek_v4_decode",
+                            "deepseek_v4_flash_decode_unified",
                         }
                     ),
                     2400,
                 ),
             )
         )
+        for m_index, queries in enumerate(PREFILL_M, start=1):
+            for ratio in (4, 128):
+                cases.append(
+                    CaseSpec(
+                        f"prefill_unified_c{ratio}_m{queries}_context65536",
+                        {
+                            "phase": "prefill",
+                            "batch": 1,
+                            "queries": queries,
+                            "raw_context": 65536,
+                            "compression_ratio": ratio,
+                            "model_input": queries,
+                            "quant_profile": PROFILE,
+                            "projection_adapter_id": (
+                                f"sparse_prefill_attention_c{ratio}"
+                            ),
+                        },
+                        4550 + m_index * 10 + ratio,
+                        frozenset(
+                            {
+                                "representative",
+                                "performance_only",
+                                f"c{ratio}",
+                                UNIFIED_TAG,
+                            }
+                        ),
+                        3600,
+                    )
+                )
         return tuple(cases)
 
     def make_inputs(self, case, context):

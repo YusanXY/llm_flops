@@ -68,6 +68,9 @@ class BootstrapContractTest(unittest.TestCase):
                 "commit": "6d0304e8ce88bddef4ec875bdd844804fd631089",
                 "dirty": True,
                 "diff_sha256": "23f8dba6cd44e09543dabc37e3b0aac220167b00bfd0afa874892d799ab97806",
+                "submodules": {
+                    "3rdparty/composable_kernel": "af7118e342580ecd3f71edce7b1d0ba465012ecf"
+                },
             },
         )
 
@@ -83,6 +86,11 @@ class BootstrapContractTest(unittest.TestCase):
     def test_explicit_python_path_does_not_inherit_the_callers_value(self):
         expected = 'export PYTHONPATH="$ROOT/src:$SGLANG_ROOT/python:$AITER_ROOT"'
         self.assertIn(expected, self.script)
+        for entrypoint in ("run.sh", "bench.sh"):
+            text = (ROOT / entrypoint).read_text()
+            self.assertIn(expected, text)
+            self.assertIn('export AITER_META_DIR="$AITER_ROOT"', text)
+            self.assertIn("export SGLANG_OPT_SWIGLU_CLAMP_FUSION=0", text)
 
     def test_does_not_download_or_install_gpu_dependencies(self):
         for forbidden in (
