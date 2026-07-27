@@ -10,6 +10,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import yaml
+
 from benchmark_engine.cli import main
 from benchmark_engine.registry import FilesystemRegistry
 
@@ -78,26 +80,38 @@ class KdaTaskRegistryTest(unittest.TestCase):
 
 
 class KdaInstallerTest(unittest.TestCase):
-    def test_mapping_covers_every_non_tutorial_reference_and_installs_contracts(self):
+    def test_mapping_covers_rocm_high_priority_references_and_installs_contracts(self):
         mapping_path = ROOT / "integrations" / "kda-pilot" / "operators.json"
         mapping = json.loads(mapping_path.read_text(encoding="utf-8"))["operators"]
         references = {
             path.name
             for path in (ROOT / "operators" / "references").iterdir()
-            if path.is_dir() and path.name != EXAMPLE
+            if path.is_dir()
+            and {"rocm", "gfx942", "high_priority"}.issubset(
+                set(
+                    yaml.safe_load(
+                        (path / "operator.yaml").read_text(encoding="utf-8")
+                    ).get("tags", ())
+                )
+            )
         }
         self.assertEqual(set(mapping), references)
         self.assertEqual(len({slug.casefold() for slug in mapping.values()}), len(mapping))
+        self.assertTrue(all(slug.endswith("_MI300X") for slug in mapping.values()))
 
-        operator_id = "deepseek_v4_topk_transform"
+        operator_id = "deepseek_v4_aiter_block_fp8_gemm"
         with tempfile.TemporaryDirectory() as temporary:
             llm_root = Path(temporary) / "llm"
+            kernel_wiki_root = Path(temporary) / "ROCm-KernelWiki-Q"
+            kernel_wiki_root.mkdir()
             result = subprocess.run(
                 (
                     sys.executable,
                     str(ROOT / "tools" / "install_kda_workload.py"),
                     "--llm-root",
                     str(llm_root),
+                    "--kernel-wiki-root",
+                    str(kernel_wiki_root),
                     "--operator",
                     operator_id,
                     "--refresh-baseline",
@@ -115,7 +129,19 @@ class KdaInstallerTest(unittest.TestCase):
             self.assertTrue(any(path.is_dir() for path in (task / "solution").iterdir()))
             prompt = (task / "prompt.md").read_text(encoding="utf-8")
             self.assertIn("MUST NOT", prompt)
+            self.assertIn("MI300X", prompt)
+            self.assertIn(str(kernel_wiki_root.resolve()), prompt)
+            self.assertIn("ROCR_VISIBLE_DEVICES=0", prompt)
             self.assertIn("../../../llm_flops/docs/kda-pilot-integration.md", prompt)
+            config = (task / "config.toml").read_text(encoding="utf-8")
+            self.assertIn('accelerator_backend = "rocm"', config)
+            self.assertIn('gpu_arch = "gfx942"', config)
+            sources = (task / "docs" / "research_sources.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("ROCm", sources)
+            self.assertIn(str(kernel_wiki_root.resolve()), sources)
+            self.assertTrue((task / "rocprof").is_dir())
             self.assertIn("ranking_eligible", (task / "bench" / "README.md").read_text(encoding="utf-8"))
             self.assertTrue(FilesystemRegistry.for_kda_task(task).discover().is_valid)
 

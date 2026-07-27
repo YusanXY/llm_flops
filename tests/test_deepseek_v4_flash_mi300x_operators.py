@@ -207,10 +207,15 @@ class DeepSeekV4FlashMi300xContractTests(unittest.TestCase):
         )
 
     def test_launchers_isolate_aiter_merged_config_cache(self):
-        for filename in ("bootstrap.sh", "run.sh", "bench.sh"):
+        expected_roots = {
+            "bootstrap.sh": "$CACHE_ROOT/aiter",
+            "bench.sh": "$CACHE_ROOT/aiter",
+            "run.sh": "$ROOT/.runtime/cache/aiter",
+        }
+        for filename, expected in expected_roots.items():
             source = (ROOT / filename).read_text(encoding="utf-8")
             self.assertIn("AITER_CONFIG_DIR", source)
-            self.assertIn(".runtime/cache/aiter", source.replace('"$RUNTIME', '"$ROOT/.runtime'))
+            self.assertIn(expected, source)
         bootstrap = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
         self.assertIn('export AITER_META_DIR="$AITER_ROOT"', bootstrap)
         self.assertIn("SGLANG_OPT_SWIGLU_CLAMP_FUSION=0", bootstrap)

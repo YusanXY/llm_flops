@@ -17,7 +17,14 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MAPPING = REPOSITORY_ROOT / "integrations" / "kda-pilot" / "operators.json"
+DEFAULT_KERNEL_WIKI_ROOT = (
+    REPOSITORY_ROOT.parent / "KDA-Pilot" / "external" / "ROCm-KernelWiki-Q"
+)
 REFERENCE_FILENAMES = ("README.md", "implementation.py", "operator.yaml", "spec.py")
+GPU_COMMAND = (
+    "ROCR_VISIBLE_DEVICES=0 HIP_VISIBLE_DEVICES=0 CUDA_VISIBLE_DEVICES=0 "
+    "../../../llm_flops/kda-bench.sh . <candidate_id>"
+)
 sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 
 from benchmark_engine.registry import FilesystemRegistry  # noqa: E402
@@ -78,10 +85,10 @@ def _copy_candidates(source: Path, destination: Path, *, dry_run: bool) -> None:
             shutil.copytree(candidate, target)
 
 
-def _task_prompt(operator_id: str, task_slug: str) -> str:
+def _task_prompt(operator_id: str, task_slug: str, kernel_wiki_root: Path) -> str:
     return f"""# KDA kernel optimization task: {task_slug}
 
-Optimize llm_flops operator `{operator_id}` on one idle target GPU.
+Optimize llm_flops operator `{operator_id}` on one idle MI300X (`gfx942`) GPU.
 
 The files in `baseline/` are the immutable reference contract. Agents MUST NOT
 edit, replace, format, patch, or generate files in that directory. Read
@@ -101,20 +108,29 @@ not change cases, tolerances, comparators, timing policy, or the reference.
 Run the complete correctness and performance gate from this task directory:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 ../../../llm_flops/kda-bench.sh . <candidate_id>
+{GPU_COMMAND}
 ```
 
 Results are written to `bench/{operator_id}/<candidate_id>/<evaluation_id>/`.
 Read `../../../llm_flops/docs/kda-pilot-integration.md` for the source and artifact
 contracts. Do not stage or copy the candidate into the llm_flops repository.
+
+Before implementation, read and query the ROCm knowledge base at
+`{kernel_wiki_root}`. This MI300X task must not use the NVIDIA
+`external/KernelWiki` as its architecture source. See
+`docs/research_sources.md` for the required ROCm sources and profiler guidance.
 """
 
 
-def _task_config(operator_id: str, task_slug: str) -> str:
+def _task_config(operator_id: str, task_slug: str, kernel_wiki_root: Path) -> str:
     return f"""[task]
 slug = \"{task_slug}\"
 agent_enabled = true
 operator_id = \"{operator_id}\"
+platform = \"MI300X\"
+accelerator_backend = \"rocm\"
+gpu_arch = \"gfx942\"
+kernel_wiki_root = \"{kernel_wiki_root}\"
 
 [evaluation]
 owner = \"llm_flops\"
@@ -124,9 +140,26 @@ solutions = \"solution/<candidate_id>/\"
 results = \"bench/{operator_id}/<candidate_id>/<evaluation_id>/\"
 
 [benchmark]
-command = \"CUDA_VISIBLE_DEVICES=0 ../../../llm_flops/kda-bench.sh . <candidate_id>\"
+command = \"{GPU_COMMAND}\"
 correctness_required = true
 single_gpu = true
+"""
+
+
+def _research_sources(kernel_wiki_root: Path) -> str:
+    return f"""# MI300X research sources
+
+This task targets AMD MI300X (`gfx942`) through ROCm/HIP.
+
+1. `{kernel_wiki_root}` — mandatory ROCm kernel knowledge base. Start with
+   `README.md`, then use `scripts/query.py` for operator-specific techniques.
+2. The immutable `baseline/README.md` and `baseline/operator.yaml` — exact
+   SGLang/AITER source lineage, dtype/layout, cases, tolerances, and timing gate.
+3. ROCm tools (`rocprofv3`, rocprofiler-sdk, or omniperf when provisioned) —
+   collect evidence only when profiling changes the next implementation choice.
+
+Do not use the sibling NVIDIA `external/KernelWiki`, NCU, CUDA-only source, or
+Blackwell-specific optimization claims as evidence for this MI300X task.
 """
 
 
@@ -159,6 +192,7 @@ copy into `operators/candidates/` is used.
 
 Use `../../../llm_flops/kda-bench.sh . <candidate_id>` from the task root. See
 `../../../../llm_flops/docs/kda-pilot-integration.md` for the complete protocol.
+The task platform is AMD MI300X (`gfx942`) and the accelerator backend is ROCm.
 """
 
 
@@ -166,6 +200,7 @@ def install(
     llm_root: Path,
     mapping: dict[str, str],
     *,
+    kernel_wiki_root: Path,
     selected: frozenset[str],
     refresh_baseline: bool,
     include_candidates: bool,
@@ -182,7 +217,15 @@ def install(
         task = llm_root / task_slug
         baseline = task / "baseline"
         solution = task / "solution"
-        for directory in (baseline, solution, task / "bench", task / "docs", task / "profile", task / "ncu", task / "tests"):
+        for directory in (
+            baseline,
+            solution,
+            task / "bench",
+            task / "docs",
+            task / "profile",
+            task / "rocprof",
+            task / "tests",
+        ):
             if not dry_run:
                 directory.mkdir(parents=True, exist_ok=True)
         _copy_reference(reference, baseline, refresh=refresh_baseline, dry_run=dry_run)
@@ -195,10 +238,19 @@ def install(
         if not dry_run:
             (task / "bench" / "README.md").write_text(_bench_readme(operator_id), encoding="utf-8")
             (task / "docs" / "llm_flops_contract.md").write_text(_contract_readme(operator_id), encoding="utf-8")
+            (task / "docs" / "research_sources.md").write_text(
+                _research_sources(kernel_wiki_root), encoding="utf-8"
+            )
             if rewrite_task_guides or not (task / "prompt.md").exists():
-                (task / "prompt.md").write_text(_task_prompt(operator_id, task_slug), encoding="utf-8")
+                (task / "prompt.md").write_text(
+                    _task_prompt(operator_id, task_slug, kernel_wiki_root),
+                    encoding="utf-8",
+                )
             if rewrite_task_guides or not (task / "config.toml").exists():
-                (task / "config.toml").write_text(_task_config(operator_id, task_slug), encoding="utf-8")
+                (task / "config.toml").write_text(
+                    _task_config(operator_id, task_slug, kernel_wiki_root),
+                    encoding="utf-8",
+                )
         installed.append(f"{operator_id}\t{task_slug}")
     missing = selected.difference(mapping)
     if missing:
@@ -236,6 +288,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--llm-root", required=True, type=Path)
     parser.add_argument("--mapping", type=Path, default=DEFAULT_MAPPING)
+    parser.add_argument(
+        "--kernel-wiki-root", type=Path, default=DEFAULT_KERNEL_WIKI_ROOT
+    )
     parser.add_argument("--operator", action="append", default=[])
     parser.add_argument("--refresh-baseline", action="store_true")
     parser.add_argument("--without-candidates", action="store_true")
@@ -248,11 +303,17 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     arguments = build_parser().parse_args()
     llm_root = arguments.llm_root.resolve()
+    kernel_wiki_root = arguments.kernel_wiki_root.resolve()
+    if not kernel_wiki_root.is_dir():
+        raise FileNotFoundError(
+            f"ROCm KernelWiki-Q root does not exist: {kernel_wiki_root}"
+        )
     mapping = _load_mapping(arguments.mapping.resolve())
     selected = frozenset(arguments.operator)
     rows = () if arguments.verify_only else install(
         llm_root,
         mapping,
+        kernel_wiki_root=kernel_wiki_root,
         selected=frozenset(arguments.operator),
         refresh_baseline=arguments.refresh_baseline,
         include_candidates=not arguments.without_candidates,

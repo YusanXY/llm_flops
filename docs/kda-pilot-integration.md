@@ -1,4 +1,4 @@
-# KDA-Pilot task-native integration
+# KDA-Pilot task-native integration for MI300X
 
 KDA-Pilot task mode evaluates source where the Agent works. It removes the old
 stage-copy step and gives the task one authoritative baseline, versioned
@@ -12,7 +12,7 @@ solutions, task-local caches, and task-local artifacts.
 | `solution/<candidate_id>/` | Agent | mutable until measured; version instead of overwriting evidence |
 | `bench/` | llm_flops artifact writer | generated; never hand-edit CSV files |
 | `.cache/llm-flops/` | compiler/JIT runtime | disposable and never an artifact |
-| `docs/`, `profile/`, `ncu/`, `tests/` | KDA task | supporting evidence only |
+| `docs/`, `profile/`, `rocprof/`, `tests/` | KDA task | supporting evidence only |
 
 The task root must contain `baseline/`, `solution/`, and `bench/`. The baseline
 contains the same strict contract files as repository mode:
@@ -33,12 +33,23 @@ directory. Discovery remains static and never imports candidate code.
 ## Install migrated contracts
 
 The administrative migration mapping is
-`integrations/kda-pilot/operators.json`. It maps every migrated non-tutorial
-operator to one unique KDA task slug. Populate or refresh a KDA workload tree:
+`integrations/kda-pilot/operators.json`. It maps the reviewed ROCm/gfx942
+high-priority operators to unique KDA task slugs ending in `_MI300X`.
+
+The deployment layout for this branch is:
+
+```text
+/mnt/public/guojingyu/agent4kernel/kda-pilot/llm_flops
+/mnt/public/guojingyu/agent4kernel/kda-pilot/KDA-Pilot/llm
+/mnt/public/guojingyu/agent4kernel/kda-pilot/KDA-Pilot/external/ROCm-KernelWiki-Q
+```
+
+Populate or refresh the MI300X KDA workload tree:
 
 ```bash
 .runtime/venv/bin/python tools/install_kda_workload.py \
-  --llm-root /path/to/KDA-Pilot/llm \
+  --llm-root /mnt/public/guojingyu/agent4kernel/kda-pilot/KDA-Pilot/llm \
+  --kernel-wiki-root /mnt/public/guojingyu/agent4kernel/kda-pilot/KDA-Pilot/external/ROCm-KernelWiki-Q \
   --refresh-baseline \
   --rewrite-task-guides
 ```
@@ -53,19 +64,25 @@ Audit every mapped task without modifying it:
 
 ```bash
 .runtime/venv/bin/python tools/install_kda_workload.py \
-  --llm-root /path/to/KDA-Pilot/llm --verify-only
+  --llm-root /mnt/public/guojingyu/agent4kernel/kda-pilot/KDA-Pilot/llm \
+  --kernel-wiki-root /mnt/public/guojingyu/agent4kernel/kda-pilot/KDA-Pilot/external/ROCm-KernelWiki-Q \
+  --verify-only
 ```
 
-`example_cpu_add` intentionally remains a repository-only tutorial and is not
-installed as an LLM optimization task.
+Tutorial and engine-smoke operators (`example_cpu_add` and
+`example_rocm_bf16_gemm`) remain repository-only and are not installed as LLM
+optimization tasks.
 
 ## One-command Agent interface
 
 From a task root:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 ../../../llm_flops/kda-bench.sh . <candidate_id>
+ROCR_VISIBLE_DEVICES=0 ../../../llm_flops/kda-bench.sh . <candidate_id>
 ```
+
+The wrapper normalizes `ROCR_VISIBLE_DEVICES`, `HIP_VISIBLE_DEVICES`, and the
+PyTorch-compatibility `CUDA_VISIBLE_DEVICES` to the same logical device.
 
 The wrapper performs:
 
@@ -105,13 +122,23 @@ and `results`.
   `requirements/benchmark-lock.json`; it defaults to `<llm_flops>/.runtime`.
 - `BENCHMARK_CACHE_ROOT` selects UV, Torch extension, FlashInfer, and XDG cache
   roots; `kda-bench.sh` defaults it to `<task>/.cache/llm-flops`.
-- `PYTHONPATH` is set to the current checkout's `src/`, so a reused runtime
-  cannot silently import an editable install from another llm_flops checkout.
+- `PYTHONPATH` is rebuilt from the current checkout's `src/` plus the explicit
+  SGLang and AITER roots loaded from `~/.config/agent4kernel/env.sh`; inherited
+  caller values are discarded.
 
 Agents must not install packages, recreate the runtime, edit the lock, or swap
-CUDA/toolchain components. If the lock check fails, stop and ask the deployment
+ROCm/HIP/toolchain components. If the lock check fails, stop and ask the deployment
 owner to provision a matching runtime. Compiler/JIT/build time is recorded
 separately and is not included in steady-state samples.
+
+## ROCm knowledge and profiling
+
+Every generated MI300X task points to
+`/mnt/public/guojingyu/agent4kernel/kda-pilot/KDA-Pilot/external/ROCm-KernelWiki-Q`.
+Read its `README.md` and query `scripts/query.py` before implementation. Do not
+use the sibling NVIDIA `external/KernelWiki`, Blackwell claims, or NCU evidence
+as the architecture basis for these tasks. Use ROCm profiling tools such as
+rocprofv3 or rocprofiler-sdk when profiling is needed.
 
 ## Result layout
 

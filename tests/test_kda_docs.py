@@ -14,6 +14,8 @@ class KdaDocumentationContractTest(unittest.TestCase):
                 "--task-root",
                 "BENCHMARK_RUNTIME_ROOT",
                 "BENCHMARK_CACHE_ROOT",
+                "ROCm-KernelWiki-Q",
+                "MI300X",
                 "ranking_eligible=true",
                 "must not",
             ),
@@ -36,6 +38,10 @@ class KdaDocumentationContractTest(unittest.TestCase):
         self.assertEqual(set(payload), {"schema_version", "operators"})
         self.assertEqual(payload["schema_version"], 1)
         self.assertNotIn("example_cpu_add", payload["operators"])
+        self.assertEqual(len(payload["operators"]), 9)
+        self.assertTrue(
+            all(slug.endswith("_MI300X") for slug in payload["operators"].values())
+        )
 
 
 if __name__ == "__main__":

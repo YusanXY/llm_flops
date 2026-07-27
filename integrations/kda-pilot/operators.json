@@ -1,22 +1,14 @@
 {
   "schema_version": 1,
   "operators": {
-    "deepseek_v4_dense_swa_attention": "deepseek_v4__llm_flops_dense_swa_attention",
-    "deepseek_v4_fp8_gemm_nt": "deepseek_v4__sglang_deep_gemm_fp8_fp8_bf16_nt",
-    "deepseek_v4_fp8_paged_mqa_logits": "deepseek_v4__llm_flops_fp8_paged_mqa_logits",
-    "deepseek_v4_indexer_fp8_quant": "deepseek_v4__llm_flops_indexer_fp8_quant",
-    "deepseek_v4_sparse_decode_attention": "deepseek_v4__sgl_kernel_sparse_decode_fwd",
-    "deepseek_v4_sparse_prefill_attention": "deepseek_v4__llm_flops_sparse_prefill_attention",
-    "deepseek_v4_topk_transform": "deepseek_v4__llm_flops_topk_transform",
-    "deepseek_v4_trtllm_fp8_mxfp8_moe": "deepseek_v4__llm_flops_trtllm_fp8_mxfp8_moe",
-    "glm5_deepep_dispatch": "glm_5__llm_flops_deepep_dispatch",
-    "glm5_dense_prefill_attention": "glm_5__llm_flops_dense_prefill_attention",
-    "glm5_dsa_index_score": "glm_5__llm_flops_dsa_index_score",
-    "glm5_dsa_indexer": "glm_5__llm_flops_dsa_indexer",
-    "glm5_dsa_projection": "glm_5__llm_flops_dsa_projection",
-    "glm5_dsa_sparse_attention": "glm_5__llm_flops_dsa_sparse_attention",
-    "glm5_dsa_unified_sparse_attention": "glm_5__llm_flops_dsa_unified_sparse_attention",
-    "glm5_moe_grouped_gemm": "glm_5__llm_flops_moe_grouped_gemm",
-    "glm5_moe_masked_grouped_gemm": "glm_5__llm_flops_moe_masked_grouped_gemm"
+    "deepseek_v4_aiter_block_fp8_gemm": "deepseek_v4__llm_flops_aiter_block_fp8_gemm_MI300X",
+    "deepseek_v4_aiter_c4_paged_mqa_logits": "deepseek_v4__llm_flops_aiter_c4_paged_mqa_logits_MI300X",
+    "deepseek_v4_aiter_fp8_fused_moe": "deepseek_v4__llm_flops_aiter_fp8_fused_moe_MI300X",
+    "deepseek_v4_aiter_fp8_linear": "deepseek_v4__llm_flops_aiter_fp8_linear_MI300X",
+    "deepseek_v4_c4_c128_compressor": "deepseek_v4__llm_flops_c4_c128_compressor_MI300X",
+    "deepseek_v4_fused_qk_norm_rope_store": "deepseek_v4__llm_flops_fused_qk_norm_rope_store_MI300X",
+    "deepseek_v4_q_rmsnorm_wqb": "deepseek_v4__llm_flops_q_rmsnorm_wqb_MI300X",
+    "deepseek_v4_tilelang_sparse_attention": "deepseek_v4__llm_flops_tilelang_sparse_attention_MI300X",
+    "deepseek_v4_wo_a_grouped_bf16": "deepseek_v4__llm_flops_wo_a_grouped_bf16_MI300X"
   }
 }

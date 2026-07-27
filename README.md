@@ -46,12 +46,14 @@ From the task directory, one command performs static validation, correctness,
 and gated performance, then publishes results under `bench/`:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 ../../../llm_flops/kda-bench.sh . <candidate_id>
+ROCR_VISIBLE_DEVICES=0 ../../../llm_flops/kda-bench.sh . <candidate_id>
 ```
 
 No source is staged into this repository. Agents must not modify `baseline/`,
 the environment lock, cases, comparators, tolerances, timers, or gates. See the
 [KDA-Pilot integration contract](docs/kda-pilot-integration.md).
+This branch targets MI300X (`gfx942`) and uses
+`KDA-Pilot/external/ROCm-KernelWiki-Q` as its kernel knowledge base.
 
 ## Five-minute CPU check
 

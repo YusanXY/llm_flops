@@ -66,7 +66,7 @@ The Agent-facing one-command wrapper validates and runs correctness plus
 performance with task-local artifacts:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 ../../../llm_flops/kda-bench.sh . CANDIDATE
+ROCR_VISIBLE_DEVICES=0 ../../../llm_flops/kda-bench.sh . CANDIDATE
 ```
 
 See [KDA-Pilot integration](kda-pilot-integration.md) for runtime ownership,

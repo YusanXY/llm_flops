@@ -12,7 +12,7 @@ contain baseline/, solution/<candidate_id>/, and bench/.  Results are written
 under TASK_ROOT/bench/<operator_id>/<candidate_id>/<evaluation_id>/.
 
 Example:
-  CUDA_VISIBLE_DEVICES=0 ../../../llm_flops/kda-bench.sh . my_optimized_v1
+  ROCR_VISIBLE_DEVICES=0 ../../../llm_flops/kda-bench.sh . my_optimized_v1
 EOF
 }
 
@@ -26,7 +26,12 @@ TASK_ROOT="$(cd -- "$1" && pwd)"
 CANDIDATE_ID="$2"
 shift 2
 
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}"
+VISIBLE_DEVICE="${ROCR_VISIBLE_DEVICES:-${HIP_VISIBLE_DEVICES:-${CUDA_VISIBLE_DEVICES:-0}}}"
+export ROCR_VISIBLE_DEVICES="$VISIBLE_DEVICE"
+export HIP_VISIBLE_DEVICES="$VISIBLE_DEVICE"
+# PyTorch retains the torch.cuda namespace on ROCm and still honors this
+# compatibility variable. Keep all three selectors on the same logical device.
+export CUDA_VISIBLE_DEVICES="$VISIBLE_DEVICE"
 export BENCHMARK_CACHE_ROOT="${BENCHMARK_CACHE_ROOT:-$TASK_ROOT/.cache/llm-flops}"
 
 "$ROOT/bench.sh" validate --task-root "$TASK_ROOT"

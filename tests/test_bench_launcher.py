@@ -21,7 +21,10 @@ class BenchLauncherContractTest(unittest.TestCase):
         self.assertIn('VENV="$RUNTIME_ROOT/venv"', self.script)
         self.assertIn('"$VENV/bin/python"', self.script)
         self.assertIn('-m benchmark_engine', self.script)
-        self.assertIn('export PYTHONPATH="$ROOT/src"', self.script)
+        self.assertIn(
+            'export PYTHONPATH="$ROOT/src:$SGLANG_ROOT/python:$AITER_ROOT"',
+            self.script,
+        )
         self.assertLess(self.script.index('cd "$ROOT"'), self.script.index('exec "$VENV/bin/python"'))
 
     def test_launcher_sets_all_repository_local_caches(self):
