@@ -1,22 +1,22 @@
 schema_version: 1
-operator_id: deepseek_v4_tilelang_sparse_attention
+operator_id: deepseek_v4_aiter_fp8_linear
 contract_version: 1
-description: DeepSeek V4 Flash MODEL1 FP8 sparse attention with gfx942 TileLang-to-Triton fallback
+description: DeepSeek V4 Flash fused WQ_A plus WKV projection through the current SGLang AITER gfx942 block-FP8 path
 reference_entrypoint: implementation:operator
 spec_entrypoint: spec:SPEC
 device_types: [cuda]
-tags: [deepseek_v4_flash, rocm, gfx942, tilelang, triton_fallback, sparse_attention, kv_cache, high_priority]
+tags: [deepseek_v4_flash, rocm, gfx942, sglang, aiter, fp8, linear, decode]
 correctness:
   default_comparator: floating
-  rtol: 0.02
-  atol: 0.08
+  rtol: 0.05
+  atol: 1.0
   equal_nan: false
   determinism_repeats: 1
 performance:
   timer: cuda_event
   graph_mode: disabled
-  warmup: 5
-  samples: 30
+  warmup: 20
+  samples: 100
   inner_iterations: 20
   timeout_s: 2400
   regression_threshold_pct: 5.0

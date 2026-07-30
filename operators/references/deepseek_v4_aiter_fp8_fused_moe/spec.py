@@ -13,6 +13,91 @@ from benchmark_engine.workloads.deepseek_v4_flash import (
 
 
 BLOCK = 128
+PREFILL_M = (1024, 2048, 4096)
+PROFILE = "fp8_block_gfx942"
+UNIFIED_TAG = "deepseek_v4_flash_prefill_unified"
+EP_SIZE = 4
+GLOBAL_EXPERTS = 256
+LOCAL_EXPERTS = GLOBAL_EXPERTS // EP_SIZE
+TOPK = 6
+
+
+def _unified_cases():
+    prefill = tuple(
+        CaseSpec(
+            (
+                f"prefill_unified_ep4_m{global_tokens}"
+                f"_localm{global_tokens // EP_SIZE}"
+                "_h4096_i2048_ge256_le64_top6_context65536"
+            ),
+            {
+                "phase": "prefill",
+                # Rank-local compute-only EP4 simulation. M/model_input remain
+                # the global request-token count used by the reporting table,
+                # while this single-GPU kernel receives one quarter of the
+                # balanced token-route assignments and one quarter of the
+                # routed experts. Dispatch/combine communication is excluded.
+                "tokens": global_tokens // EP_SIZE,
+                "global_tokens": global_tokens,
+                "hidden": 4096,
+                "intermediate": 2048,
+                "experts": LOCAL_EXPERTS,
+                "global_experts": GLOBAL_EXPERTS,
+                "local_experts": LOCAL_EXPERTS,
+                "expert_parallel_size": EP_SIZE,
+                "topk": TOPK,
+                "global_route_assignments": global_tokens * TOPK,
+                "local_route_assignments": global_tokens * TOPK // EP_SIZE,
+                "model_input": global_tokens,
+                "raw_context": 65536,
+                "quant_profile": PROFILE,
+                "projection_adapter_id": "routed_expert_fused_moe",
+            },
+            4650 + index,
+            frozenset(
+                {
+                    "representative",
+                    "performance_only",
+                    "ep4_rank_local",
+                    UNIFIED_TAG,
+                }
+            ),
+            3600,
+        )
+        for index, global_tokens in enumerate(PREFILL_M, start=1)
+    )
+    decode_m32 = CaseSpec(
+        "decode_unified_ep4_m32_localm8_h4096_i2048_ge256_le64_top6_context65536",
+        {
+            "phase": "decode",
+            "tokens": 32 // EP_SIZE,
+            "global_tokens": 32,
+            "hidden": 4096,
+            "intermediate": 2048,
+            "experts": LOCAL_EXPERTS,
+            "global_experts": GLOBAL_EXPERTS,
+            "local_experts": LOCAL_EXPERTS,
+            "expert_parallel_size": EP_SIZE,
+            "topk": TOPK,
+            "global_route_assignments": 32 * TOPK,
+            "local_route_assignments": 32 * TOPK // EP_SIZE,
+            "model_input": 32,
+            "raw_context": 65536,
+            "quant_profile": PROFILE,
+            "projection_adapter_id": "routed_expert_fused_moe",
+        },
+        4660,
+        frozenset(
+            {
+                "representative",
+                "performance_only",
+                "ep4_rank_local",
+                "deepseek_v4_flash_decode_unified",
+            }
+        ),
+        3600,
+    )
+    return prefill + (decode_m32,)
 
 
 def _quantize_weight(torch, value):
@@ -88,6 +173,71 @@ def _semantic_oracle(
     return output
 
 
+def _triton_oracle(
+    torch,
+    hidden_states,
+    w13,
+    w2,
+    topk_weights,
+    topk_ids,
+    w13_scale,
+    w2_scale,
+    experts,
+    hidden,
+    intermediate,
+    topk,
+):
+    """Independent SGLang Triton oracle for representative AITER cases."""
+    from types import SimpleNamespace
+
+    from sglang.srt.environ import envs
+    from sglang.srt.layers.moe.moe_runner.base import MoeRunnerConfig
+    from sglang.srt.layers.moe.moe_runner.triton_utils.fused_moe import (
+        fused_moe as triton_fused_moe,
+    )
+    from sglang.srt.layers.moe.topk import StandardTopKOutput
+    from sglang.srt.server_args import (
+        get_global_server_args,
+        set_global_server_args_for_scheduler,
+    )
+
+    # The fused clamp epilogue is CUDA-only. This setting does not affect AITER.
+    envs.SGLANG_OPT_SWIGLU_CLAMP_FUSION.set(False)
+    try:
+        get_global_server_args()
+    except ValueError:
+        set_global_server_args_for_scheduler(
+            SimpleNamespace(
+                enable_deterministic_inference=False,
+                enable_fused_moe_sum_all_reduce=False,
+            )
+        )
+    config = MoeRunnerConfig(
+        num_experts=experts,
+        num_local_experts=experts,
+        hidden_size=hidden,
+        intermediate_size_per_partition=intermediate,
+        top_k=topk,
+        activation="silu",
+        is_gated=True,
+        inplace=False,
+        swiglu_limit=10.0,
+    )
+    output = triton_fused_moe(
+        hidden_states=hidden_states,
+        w1=w13,
+        w2=w2,
+        topk_output=StandardTopKOutput(topk_weights, topk_ids, None),
+        moe_runner_config=config,
+        use_fp8_w8a8=True,
+        w1_scale=w13_scale,
+        w2_scale=w2_scale,
+        block_shape=[128, 128],
+    )
+    torch.cuda.synchronize(hidden_states.device)
+    return output
+
+
 class DeepSeekV4AiterFp8FusedMoeSpec:
     operator_id = "deepseek_v4_aiter_fp8_fused_moe"
 
@@ -132,9 +282,7 @@ class DeepSeekV4AiterFp8FusedMoeSpec:
                     "topk": 6,
                 },
                 4603,
-                frozenset(
-                    {"representative", "performance_only", "deepseek_v4_prefill"}
-                ),
+                frozenset({"representative", "oracle", "deepseek_v4_prefill"}),
                 2400,
             ),
             CaseSpec(
@@ -146,14 +294,23 @@ class DeepSeekV4AiterFp8FusedMoeSpec:
                     "intermediate": 2048,
                     "experts": 256,
                     "topk": 6,
+                    "model_input": 16,
+                    "raw_context": 65536,
+                    "quant_profile": PROFILE,
+                    "projection_adapter_id": "routed_expert_fused_moe",
                 },
                 4604,
                 frozenset(
-                    {"representative", "performance_only", "deepseek_v4_decode"}
+                    {
+                        "representative",
+                        "oracle",
+                        "deepseek_v4_decode",
+                        "deepseek_v4_flash_decode_unified",
+                    }
                 ),
                 2400,
             ),
-        )
+        ) + _unified_cases()
 
     def make_inputs(self, case, context):
         torch = importlib.import_module("torch")
@@ -174,8 +331,9 @@ class DeepSeekV4AiterFp8FusedMoeSpec:
             device=device,
             generator=generator,
         ).clamp_(-1.0, 1.0)
-        is_small = "performance_only" not in case.tags
-        if is_small:
+        requires_oracle = "performance_only" not in case.tags
+        use_small_oracle = requires_oracle and "representative" not in case.tags
+        if use_small_oracle:
             w13_source = torch.randn(
                 (experts, 2 * intermediate, hidden),
                 dtype=torch.bfloat16,
@@ -199,25 +357,37 @@ class DeepSeekV4AiterFp8FusedMoeSpec:
                 torch, (experts, hidden, intermediate), device
             )
             oracle_w13 = oracle_w2 = None
-        topk_ids = (
-            torch.arange(tokens * topk, dtype=torch.int32, device=device)
-            .view(tokens, topk)
-            .remainder(experts)
-        )
-        logits = torch.randn(
+        # Routing itself is outside the fused-MoE operator. Use a deterministic
+        # balanced dispatch so this kernel benchmark measures expert compute
+        # rather than a random expert-load tail. Keep DeepSeek V4's
+        # sqrt-softplus, normalization, and routed_scaling_factor=1.5 semantics
+        # for the per-route weights.
+        router_logits = torch.randn(
             (tokens, topk),
             dtype=torch.float32,
             device=device,
             generator=generator,
         )
-        topk_weights = torch.softmax(logits, dim=-1)
+        selected_scores = torch.sqrt(
+            torch.nn.functional.softplus(router_logits)
+        )
+        topk_ids = (
+            torch.arange(
+                tokens * topk, dtype=torch.int32, device=device
+            )
+            .view(tokens, topk)
+            .remainder(experts)
+        )
+        topk_weights = (
+            selected_scores / selected_scores.sum(dim=-1, keepdim=True)
+        ).mul_(1.5)
         observed = {
             "topk_ids": topk_ids,
             "topk_weights": topk_weights,
             "w13_scale_head": w13_scale[:1, :1, : min(4, w13_scale.shape[-1])],
             "w2_scale_head": w2_scale[:1, :1, : min(4, w2_scale.shape[-1])],
         }
-        if is_small:
+        if use_small_oracle:
             oracle = _semantic_oracle(
                 torch,
                 hidden_states,
@@ -230,10 +400,24 @@ class DeepSeekV4AiterFp8FusedMoeSpec:
                 intermediate,
             )
             observed["semantic_oracle"] = sample_tensor(oracle)
-        w13_canonical = w13
-        w2_canonical = w2
-        w13 = shuffle(w13_canonical.contiguous(), (16, 16))
-        w2 = shuffle(w2_canonical.contiguous(), (16, 16))
+        elif requires_oracle:
+            oracle = _triton_oracle(
+                torch,
+                hidden_states,
+                w13,
+                w2,
+                topk_weights,
+                topk_ids,
+                w13_scale,
+                w2_scale,
+                experts,
+                hidden,
+                intermediate,
+                topk,
+            )
+            observed["semantic_oracle"] = sample_tensor(oracle)
+        w13 = shuffle(w13.contiguous(), (16, 16))
+        w2 = shuffle(w2.contiguous(), (16, 16))
         observed["w13_scale_head"] = w13_scale[
             :1, :1, : min(4, w13_scale.shape[-1])
         ]
@@ -245,8 +429,6 @@ class DeepSeekV4AiterFp8FusedMoeSpec:
                 hidden_states,
                 w13,
                 w2,
-                w13_canonical,
-                w2_canonical,
                 topk_weights,
                 topk_ids,
                 w13_scale,
@@ -320,11 +502,9 @@ class DeepSeekV4AiterFp8FusedMoeSpec:
             "weight_dtype": "float8_e4m3fnuz",
             "scale_dtype": "float32 block inverse scale",
             "swiglu_limit": 10.0,
-            "backend": "SGLang Triton block-FP8 fused MoE",
-            "aiter_diagnostic": (
-                "opt-in only: LLM_FLOPS_DSV4_USE_AITER_MOE=1; excluded from "
-                "formal results because the pinned gfx942 path is unstable"
-            ),
+            "backend": "direct AITER block-FP8 fused MoE used by SGLang",
+            "routing": "ungrouped sqrtsoftplus, normalized top6, scale=1.5",
+            "oracle": "independent SGLang Triton block-FP8 fused MoE",
         }
 
 

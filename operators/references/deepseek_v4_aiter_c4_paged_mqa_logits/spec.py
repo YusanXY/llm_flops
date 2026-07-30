@@ -16,6 +16,35 @@ HEADS = 64
 HEAD_DIM = 128
 PAGE_SIZE = 64
 RATIO = 4
+PREFILL_M = (1024, 2048, 4096)
+PROFILE = "fp8_block_gfx942"
+UNIFIED_TAG = "deepseek_v4_flash_prefill_unified"
+
+
+def _unified_cases():
+    return tuple(
+        CaseSpec(
+            f"prefill_unified_m{queries}_context65536",
+            {
+                "phase": "prefill",
+                "queries": queries,
+                "raw_context": 65536,
+                "model_input": queries,
+                "quant_profile": PROFILE,
+                "projection_adapter_id": "c4_fp8_paged_mqa_logits",
+            },
+            4450 + index,
+            frozenset(
+                {
+                    "representative",
+                    "performance_only",
+                    UNIFIED_TAG,
+                }
+            ),
+            3600,
+        )
+        for index, queries in enumerate(PREFILL_M, start=1)
+    )
 
 
 def _pack_and_shuffle(torch, logical_cache):
@@ -104,14 +133,26 @@ class DeepSeekV4AiterC4PagedMqaSpec:
             ),
             CaseSpec(
                 "decode_representative_b16_context65536",
-                {"phase": "decode", "queries": 16, "raw_context": 65536},
+                {
+                    "phase": "decode",
+                    "queries": 16,
+                    "raw_context": 65536,
+                    "model_input": 16,
+                    "quant_profile": PROFILE,
+                    "projection_adapter_id": "c4_fp8_paged_mqa_logits",
+                },
                 4404,
                 frozenset(
-                    {"representative", "performance_only", "deepseek_v4_decode"}
+                    {
+                        "representative",
+                        "performance_only",
+                        "deepseek_v4_decode",
+                        "deepseek_v4_flash_decode_unified",
+                    }
                 ),
                 1800,
             ),
-        )
+        ) + _unified_cases()
 
     def make_inputs(self, case, context):
         torch = importlib.import_module("torch")

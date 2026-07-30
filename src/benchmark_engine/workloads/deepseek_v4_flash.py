@@ -78,6 +78,8 @@ class NumericPath:
     atol: float
     rtol: float = 0.0
     oracle_path: str | None = None
+    oracle_atol: float | None = None
+    oracle_rtol: float | None = None
 
 
 def _numeric_error(left, right, *, atol: float, rtol: float):
@@ -159,8 +161,8 @@ class OracleStateComparator:
                 maximum, passed = _numeric_error(
                     leaf.value,
                     oracle.value,
-                    atol=rule.atol,
-                    rtol=rule.rtol,
+                    atol=rule.atol if rule.oracle_atol is None else rule.oracle_atol,
+                    rtol=rule.rtol if rule.oracle_rtol is None else rule.oracle_rtol,
                 )
                 metrics[f"{rule.path}.{role}_oracle_max_abs"] = maximum
                 if not passed:
