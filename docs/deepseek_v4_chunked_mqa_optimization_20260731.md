@@ -45,6 +45,11 @@ from `--set full`, `m=4096`, on GPU 3 under the repository lock.
 | V15 | cluster Q16, four M256 passes, alternating consumer WGs | 9/9 | 0.4579-0.4591 ms | 461.98 us | 692.191 MB | 34.570 M | 168 | 155.136 KB | first two-SM traffic win near V4 latency |
 | V16 | V15 with 32 KV splits per scheduler chunk | 9/9 | 0.4527-0.4536 ms | 453.92 us | 621.863 MB | 32.456 M | 168 | 155.136 KB | first two-SM benchmark winner |
 | V17 | V16 with 64 KV splits per scheduler chunk | 9/9 | 0.4497-0.4509 ms | 448.48 us | 586.490 MB | 31.414 M | 168 | 155.136 KB | current champion |
+| V18 | V17 with 128 KV splits per chunk | 9/9 | 0.4497-0.4500 ms | 448.74 us | 586.490 MB | 31.350 M | 168 | 155.136 KB | rejected: no robust gain |
+| V19 | V17 with six KV stages | 9/9 | 0.4503 ms average | 451.78 us | 586.490 MB | 31.379 M | 168 | 172.032 KB | rejected: deeper ring regresses |
+| V20 | explicit group2 TMA completion aggregation | failed | n/a | n/a | n/a | n/a | n/a | n/a | rejected: launch failure, then barrier deadlock |
+| V21 | Q32 cluster, eight M256 passes, five KV stages | 9/9 | 0.4588 ms average | 457.76 us | 326.320 MB | 23.380 M | 168 | 224.768 KB | valid traffic reduction, slower |
+| V22 | V21 with four KV stages | 9/9 | 0.4571 ms average | 456.99 us | 326.320 MB | 23.392 M | 168 | 207.872 KB | faster than V21, still behind V17 |
 
 V5 (Q1/KV6) is intentionally excluded because its dynamic shared-memory
 request is invalid on the device and it did not pass correctness execution.
@@ -141,6 +146,48 @@ long-scoreboard samples on the polling branches immediately following
 experiment therefore increases the chunk once more, while retaining V17 if
 the longer readiness interval stops paying for the saved scheduler traffic.
 
+## V18-V22 report-driven follow-up
+
+V18 increased the scheduler chunk from 64 to 128.  Its clean formal averages
+were `0.119393 / 0.230912 / 0.449841 ms` at `m=1024/2048/4096`.  The largest
+case was only `0.128%` faster than V17 in the benchmark while its full NCU
+duration was `448.736 us`, slightly slower than V17.  It therefore does not
+replace the more robust chunk-64 point.
+
+V19 increased the KV ring from five to six stages.  All nine cases passed, but
+the averages became `0.119953 / 0.231040 / 0.450266 ms`, and full NCU rose to
+`451.776 us` despite essentially unchanged traffic.  The additional
+`16.896 KB` of SMEM did not hide a new latency component, so the deeper ring
+was rejected.
+
+V20 attempted to replace the rank-1 local KV wait plus peer arrival with
+explicit `cta_group::2` TMA transaction aggregation.  Initial barrier arrival
+count 1 caused an unspecified launch failure.  Matching the official group2
+initial count of 2 removed that failure but deadlocked in the first strict
+case.  No performance claim or NCU report is made for a kernel that cannot
+complete.  Both failure diagnostics and the source are preserved.
+
+V21 doubled the reuse window from Q16 to Q32 while retaining the exact
+M256N256K32 group2 MMA and per-head ReLU arithmetic.  It passed 9/9, with
+maximum independent profile-oracle error `4.76837158203125e-7` and bitwise
+unchanged cache.  Formal averages were
+`0.125077 / 0.236281 / 0.458832 ms`.  Full NCU confirms the intended traffic
+effect: TMA receiver traffic fell from `586.490` to `326.320 MB` and L2 sectors
+from `31.414` to `23.380 M`.  However, duration increased from `448.480` to
+`457.760 us`; tensor activity fell from `54.510%` to `52.931%`, SM throughput
+from `60.971%` to `59.216%`, and dynamic SMEM grew from `155.136` to
+`224.768 KB`.  Source sampling exposes four dominant TMEM-ready polling sites
+instead of V17's two, showing that the eight-pass Q-pair dependency chain, not
+KV traffic, becomes the limiting path.
+
+V22 reduced the Q32 KV ring from five stages to four, lowering dynamic SMEM to
+`207.872 KB`.  It remained 9/9 and improved the clean formal averages to
+`0.124425 / 0.235284 / 0.457117 ms`; NCU improved to `456.992 us`.  TMA traffic
+remained `326.320 MB`, L2 sectors `23.392 M`, tensor activity `52.834%`, and SM
+throughput `59.109%`.  This confirms that five stages were excessive for Q32,
+but also that reducing L2 traffic alone cannot overcome the longer TMEM and
+epilogue critical path.  V17 remains the production champion.
+
 ## Evidence locations
 
 Full reports are intentionally kept outside Git history under:
@@ -161,3 +208,10 @@ The current Q16 reports are:
 - `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q16_2smkv_2wg_q1kv5_v15_single_request_20260731/`
 - `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q16_2smkv_2wg_q1kv5_chunk32_v16_single_request_20260731/`
 - `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q16_2smkv_2wg_q1kv5_chunk64_v17_single_request_20260731/`
+- `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q16_2smkv_2wg_q1kv5_chunk128_v18_single_request_20260731/`
+- `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q16_2smkv_2wg_q1kv6_chunk64_v19_single_request_20260731/`
+- `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q32_2smkv_2wg_q1kv5_chunk64_v21_single_request_20260731/`
+- `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q32_2smkv_2wg_q1kv4_chunk64_v22_single_request_20260731/`
+
+Mirrored local archives are under `D:\work\agent4kernel\mega_results\v18_*`
+through `v22_*`; V20 failures are under `mega_results\v20_failure`.
