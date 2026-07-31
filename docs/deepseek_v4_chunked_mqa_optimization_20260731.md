@@ -51,6 +51,7 @@ from `--set full`, `m=4096`, on GPU 3 under the repository lock.
 | V21 | Q32 cluster, eight M256 passes, five KV stages | 9/9 | 0.4588 ms average | 457.76 us | 326.320 MB | 23.380 M | 168 | 224.768 KB | valid traffic reduction, slower |
 | V22 | V21 with four KV stages | 9/9 | 0.4571 ms average | 456.99 us | 326.320 MB | 23.392 M | 168 | 207.872 KB | faster than V21, still behind V17 |
 | V23 | V17 with four KV stages | 9/9 | 0.4477 ms average | 447.52 us | 586.490 MB | 31.353 M | 168 | 138.240 KB | current champion |
+| V24 | V23 with three KV stages | 9/9 | 0.4828 ms average | 484.80 us | 586.490 MB | 31.391 M | 168 | 121.344 KB | rejected: insufficient producer lead |
 
 V5 (Q1/KV6) is intentionally excluded because its dynamic shared-memory
 request is invalid on the device and it did not pass correctness execution.
@@ -215,6 +216,17 @@ The independent profile oracle remains at maximum absolute error
 PTX contains 16 `tcgen05.mma.cta_group::2` instructions and SASS contains 16
 `UTCQMMA.2CTA`.  V23 therefore replaces V17 as the production champion.
 
+V24 probes the lower ring-depth boundary by changing only the KV stage count
+from four to three.  It remains semantically valid and passes 9/9, but formal
+median averages regress to `0.130401 / 0.249794 / 0.482776 ms`, or
+`+9.79% / +8.96% / +7.84%` versus V23.  Full NCU records `484.800 us`, an
+`8.33%` regression, even though TMA receiver traffic and L1 sectors remain
+exactly unchanged.  Tensor-pipe activity drops from `54.732%` to `49.667%` and
+SM throughput from `61.219%` to `56.728%`.  The decisive PC-sampling change is
+short-scoreboard stall growth from 1,241 to 2,903 samples (`+133.9%`), together
+with sleeping `+23.6%` and barrier `+12.7%`.  Three KV stages therefore cannot
+keep the consumer supplied; V23's four-stage ring is the measured minimum.
+
 ## Evidence locations
 
 Full reports are intentionally kept outside Git history under:
@@ -240,6 +252,7 @@ The current Q16 reports are:
 - `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q32_2smkv_2wg_q1kv5_chunk64_v21_single_request_20260731/`
 - `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q32_2smkv_2wg_q1kv4_chunk64_v22_single_request_20260731/`
 - `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q16_2smkv_2wg_q1kv4_chunk64_v23_single_request_20260731/`
+- `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q16_2smkv_2wg_q1kv3_chunk64_v24_single_request_20260731/`
 
 Mirrored local archives are under `D:\work\agent4kernel\mega_results\v18_*`
-through `v23_*`; V20 failures are under `mega_results\v20_failure`.
+through `v24_*`; V20 failures are under `mega_results\v20_failure`.
