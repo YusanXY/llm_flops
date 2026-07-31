@@ -1,0 +1,26 @@
+schema_version: 1
+operator_id: deepseek_v4_mega_mqa_logits
+contract_version: 2
+description: Sequential DeepSeek V4 C4 Indexer KV producer, physical cache store, and FP8 paged MQA logits baseline
+reference_entrypoint: implementation:operator
+spec_entrypoint: spec:SPEC
+device_types: [cuda]
+tags: [deepseek_v4, mega, c4, indexer, paged_kv, logits]
+correctness:
+  default_comparator: floating
+  rtol: 0.00001
+  atol: 0.000001
+  equal_nan: false
+  determinism_repeats: 1
+performance:
+  timer: cuda_event
+  graph_mode: disabled
+  warmup: 2
+  samples: 10
+  inner_iterations: 1
+  timeout_s: 3600
+  regression_threshold_pct: 5.0
+  max_cv: 0.10
+  unsupported_policy: fail
+  gpu_lock_timeout_s: 600
+cost_model: spec:cost_model

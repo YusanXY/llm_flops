@@ -24,7 +24,10 @@ LEGACY_MAPPING = {
 def _projection_cases():
     return tuple(CaseSpec(
         f"{phase}__c4_fp8_paged_mqa_logits__m{m}__ctx65536__fp8_mxfp8",
-        {"batch": m, "raw_context": 65536, "compression_ratio": 4, "page_size": 64,
+        {"batch": 1 if phase == "prefill" else m,
+         "query_tokens": m if phase == "prefill" else 1,
+         "request_count": 1 if phase == "prefill" else m,
+         "raw_context": 65536, "compression_ratio": 4, "page_size": 64,
          "heads": 64, "head_dim": 128, "phase": phase, "quant_profile": "fp8_mxfp8",
          "model_input": m, "projection_adapter_id": "c4_fp8_paged_mqa_logits"},
         229, frozenset({"model_projection", f"deepseek_v4_{phase}", f"phase_{phase}",
@@ -146,23 +149,35 @@ class DeepSeekV4Fp8PagedMqaLogitsSpec:
     @staticmethod
     def _validate(symbols):
         batch, raw_context, ratio, page_size, heads, head_dim = (int(symbols[n]) for n in ("batch", "raw_context", "compression_ratio", "page_size", "heads", "head_dim"))
-        if batch <= 0 or raw_context <= 0:
-            raise ValueError("batch and raw_context must be positive")
+        query_tokens = int(symbols.get("query_tokens", 1))
+        if batch <= 0 or query_tokens <= 0 or raw_context <= 0:
+            raise ValueError("batch, query_tokens and raw_context must be positive")
         if ratio != COMPRESSION_RATIO:
             raise NotImplementedError("FP8 paged MQA logits supports the C4 cache only")
         if page_size != PAGE_SIZE or heads != HEADS or head_dim != HEAD_DIM:
             raise NotImplementedError("unsupported page/head layout")
         compressed = (raw_context + ratio - 1) // ratio
-        return batch, raw_context, compressed
+        if symbols.get("phase") == "prefill" and batch != 1:
+            raise ValueError("prefill CaseSpec must describe exactly one request")
+        return batch, query_tokens, raw_context, compressed
 
     def layout_contract(self, case):
-        batch, raw, compressed = self._validate(case.symbols)
+        batch, query_tokens, raw, compressed = self._validate(case.symbols)
         pages = (compressed + PAGE_SIZE - 1) // PAGE_SIZE
-        return {"q": [batch, HEADS, HEAD_DIM], "kv_cache": [batch * pages, PAGE_SIZE, HEAD_DIM + 4], "block_table": [batch, pages], "raw_context": raw, "compressed_context": compressed, "tail_tokens": compressed % PAGE_SIZE, "cache_mutation": "forbidden", "observed_state": ["cache_head", "cache_tail", "block_table"], "workspace_lifecycle": "schedule is prepared once per isolated input clone"}
+        q_shape = ([batch, query_tokens, HEADS, HEAD_DIM]
+                   if query_tokens > 1 else [batch, HEADS, HEAD_DIM])
+        lengths_shape = ([batch, query_tokens] if query_tokens > 1 else [batch, 1])
+        return {"request_count": batch, "query_tokens_per_request": query_tokens,
+                "q": q_shape, "context_lens": lengths_shape,
+                "kv_cache": [batch * pages, PAGE_SIZE, HEAD_DIM + 4],
+                "block_table": [batch, pages], "raw_context": raw,
+                "compressed_context": compressed, "tail_tokens": compressed % PAGE_SIZE,
+                "cache_mutation": "forbidden", "observed_state": ["cache_head", "cache_tail", "block_table"],
+                "workspace_lifecycle": "schedule is prepared once per isolated input clone"}
 
     def make_inputs(self, case, context):
         torch, deep_gemm, _, utils = _runtime()
-        batch, _, compressed = self._validate(case.symbols)
+        batch, query_tokens, raw_context, compressed = self._validate(case.symbols)
         performance_only = "performance_only" in case.tags
         device = next(iter(context.cuda), "cuda:0")
         generator = context.cuda.get(device)
@@ -171,18 +186,29 @@ class DeepSeekV4Fp8PagedMqaLogitsSpec:
         pages = (compressed + PAGE_SIZE - 1) // PAGE_SIZE
         blocks = batch * pages
         required = (
-            batch * HEADS * HEAD_DIM
+            batch * query_tokens * HEADS * HEAD_DIM
             + blocks * PAGE_SIZE * (HEAD_DIM + 4)
             + (0 if performance_only else batch * pages * PAGE_SIZE * HEAD_DIM * 4)
-            + batch * compressed * 4
+            + batch * query_tokens * compressed * 4
         )
         free, _ = torch.cuda.mem_get_info(device)
         _check_available_memory(required, free)
         page_table = torch.arange(blocks, dtype=torch.int32, device=device).view(batch, pages)
-        context_lens = torch.full((batch,), compressed, dtype=torch.int32, device=device)
-        context_lens_2d = context_lens.unsqueeze(-1)
+        if query_tokens > 1:
+            raw_prefix = raw_context - query_tokens
+            if raw_prefix < 0:
+                raise ValueError("prefill query_tokens cannot exceed raw_context")
+            context_lens_2d = torch.div(
+                torch.arange(raw_prefix + 1, raw_context + 1, device=device, dtype=torch.int32),
+                COMPRESSION_RATIO,
+                rounding_mode="floor",
+            ).view(batch, query_tokens)
+        else:
+            context_lens_2d = torch.full((batch, 1), compressed, dtype=torch.int32, device=device)
         schedule = deep_gemm.get_paged_mqa_logits_metadata(context_lens_2d, PAGE_SIZE, deep_gemm.get_num_sms())
-        q_fp8 = torch.ones((batch, HEADS, HEAD_DIM), dtype=torch.float8_e4m3fn, device=device)
+        q_shape = ((batch, query_tokens, HEADS, HEAD_DIM)
+                   if query_tokens > 1 else (batch, HEADS, HEAD_DIM))
+        q_fp8 = torch.ones(q_shape, dtype=torch.float8_e4m3fn, device=device)
         logical_tokens = pages * PAGE_SIZE
         kv_fp8 = torch.empty((blocks, PAGE_SIZE, HEAD_DIM), dtype=torch.float8_e4m3fn, device=device)
         logical_kv = None
@@ -200,18 +226,25 @@ class DeepSeekV4Fp8PagedMqaLogitsSpec:
                 kv_fp8[page_table[batch_index].long()] = logical_pages.to(torch.float8_e4m3fn)
         kv_scale = torch.ones((blocks, PAGE_SIZE), dtype=torch.float32, device=device)
         kv_fused = utils.fp8_mqa_logits_make_fused_kv(kv_fp8, kv_scale, PAGE_SIZE, HEAD_DIM)
-        weights = torch.zeros((batch, HEADS), dtype=torch.float32, device=device)
+        rows = batch * query_tokens
+        weights = torch.zeros((rows, HEADS), dtype=torch.float32, device=device)
         weights[:, 0] = 1.0 / HEAD_DIM
         if performance_only:
             observed = _bounded_observed_state(kv_fused, page_table)
         else:
-            oracle_full = _mqa_logits_oracle(torch, q_fp8, logical_kv[:, :compressed], weights, context_lens)
+            oracle_full = _mqa_logits_oracle(
+                torch,
+                q_fp8,
+                logical_kv[:, :compressed],
+                weights,
+                context_lens_2d,
+            )
             count = min(oracle_full.numel(), 256 if "representative" in case.tags else oracle_full.numel())
             oracle_indices = _sample_indices(torch, oracle_full.numel(), device, count)
             oracle = oracle_full.reshape(-1)[oracle_indices]
             observed = {"semantic_oracle": oracle, "oracle_indices": oracle_indices,
                         "cache_head": kv_fused[:1], "cache_tail": kv_fused[-1:], "block_table": page_table}
-        return InputBundle(args=(q_fp8, kv_fused, weights, context_lens_2d, page_table, schedule, compressed, batch), observed_state=observed)
+        return InputBundle(args=(q_fp8, kv_fused, weights, context_lens_2d, page_table, schedule, compressed, rows), observed_state=observed)
 
     def clone_inputs(self, inputs):
         torch, deep_gemm, _, _ = _runtime()
@@ -233,8 +266,18 @@ class DeepSeekV4Fp8PagedMqaLogitsSpec:
         return OracleAndStateComparator(require_oracle="performance_only" not in case.tags)
 
     def cost_model(self, case):
-        batch, _, compressed = self._validate(case.symbols)
-        return {"flops": 2 * batch * HEADS * compressed * HEAD_DIM, "estimated_bytes": batch * HEADS * HEAD_DIM + batch * compressed * (HEAD_DIM + 4) + batch * compressed * 4, "throughput_units": batch * compressed}
+        batch, query_tokens, raw_context, compressed = self._validate(case.symbols)
+        rows = batch * query_tokens
+        if query_tokens > 1:
+            causal_elements = sum(
+                (raw_context - query_tokens + index + 1) // COMPRESSION_RATIO
+                for index in range(query_tokens)
+            )
+        else:
+            causal_elements = rows * compressed
+        return {"flops": 2 * HEADS * causal_elements * HEAD_DIM,
+                "estimated_bytes": rows * HEADS * HEAD_DIM + causal_elements * (HEAD_DIM + 4) + rows * compressed * 4,
+                "throughput_units": rows * compressed}
 
     def workspace_bytes(self, case):
         self._validate(case.symbols)

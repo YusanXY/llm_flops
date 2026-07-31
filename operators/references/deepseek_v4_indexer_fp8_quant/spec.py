@@ -36,7 +36,10 @@ LEGACY_INDEXER_FP8 = {
 def _projection_cases():
     return tuple(CaseSpec(
         f"{phase}__c4_indexer_fp8_quant__m{m}__ctx65536__fp8_mxfp8",
-        {"batch": m, "context": 65536, "position": 65535, "pattern": "random",
+        {"batch": 1 if phase == "prefill" else m,
+         "query_tokens": m if phase == "prefill" else 1,
+         "request_count": 1 if phase == "prefill" else m,
+         "context": 65536, "position": 65535, "pattern": "random",
          "weight_layout": "contiguous", "phase": phase, "quant_profile": "fp8_mxfp8",
          "raw_context": 65536, "model_input": m, "projection_adapter_id": "c4_indexer_fp8_quant"},
         223, frozenset({"model_projection", f"deepseek_v4_{phase}", f"phase_{phase}",
@@ -112,30 +115,44 @@ class DeepSeekV4IndexerFp8QuantSpec:
     @staticmethod
     def _validate(symbols):
         batch, context, position = (int(symbols[n]) for n in ("batch", "context", "position"))
-        if batch <= 0 or context <= 0:
-            raise ValueError("batch and context must be positive")
+        query_tokens = int(symbols.get("query_tokens", 1))
+        if batch <= 0 or query_tokens <= 0 or context <= 0:
+            raise ValueError("batch, query_tokens and context must be positive")
         if position < 0 or position >= context:
             raise ValueError("position must satisfy 0 <= position < context")
+        if query_tokens > context:
+            raise ValueError("query_tokens cannot exceed context")
         if symbols.get("weight_layout") not in {"contiguous", "noncontiguous"}:
             raise ValueError("unsupported weight layout")
-        return batch, context, position
+        if symbols.get("phase") == "prefill" and batch != 1:
+            raise ValueError("prefill CaseSpec must describe exactly one request")
+        return batch, query_tokens, context, position
 
     def make_inputs(self, case, context):
         torch = _torch()
-        batch, sequence, position = self._validate(case.symbols)
+        batch, query_tokens, sequence, position = self._validate(case.symbols)
+        rows = batch * query_tokens
         device = next(iter(context.cuda), "cuda:0")
         generator = context.cuda.get(device)
         if generator is None:
             raise RuntimeError("deepseek_v4_indexer_fp8_quant requires a CUDA generator")
-        q = torch.randn((batch, HEADS, HEAD_DIM), device=device, dtype=torch.bfloat16, generator=generator)
+        q = torch.randn((rows, HEADS, HEAD_DIM), device=device, dtype=torch.bfloat16, generator=generator)
         if case.symbols.get("pattern") == "zero":
             q.zero_()
         if case.symbols.get("weight_layout") == "noncontiguous":
-            storage = torch.randn((batch, HEADS * 2), device=device, dtype=torch.bfloat16, generator=generator)
+            storage = torch.randn((rows, HEADS * 2), device=device, dtype=torch.bfloat16, generator=generator)
             weight = storage[:, ::2]
         else:
-            weight = torch.randn((batch, HEADS), device=device, dtype=torch.bfloat16, generator=generator)
-        positions = torch.full((batch,), position, device=device, dtype=torch.int32)
+            weight = torch.randn((rows, HEADS), device=device, dtype=torch.bfloat16, generator=generator)
+        if query_tokens > 1:
+            positions = torch.arange(
+                sequence - query_tokens,
+                sequence,
+                device=device,
+                dtype=torch.int32,
+            )
+        else:
+            positions = torch.full((rows,), position, device=device, dtype=torch.int32)
         freqs_cis = _freqs_cis(torch, sequence, device)
         return InputBundle(args=(q, weight, WEIGHT_SCALE, freqs_cis, positions))
 
@@ -177,11 +194,12 @@ class DeepSeekV4IndexerFp8QuantSpec:
         return IndexerQuantComparator()
 
     def cost_model(self, case):
-        batch, _, _ = self._validate(case.symbols)
-        values = batch * HEADS * HEAD_DIM
-        rope_flops = batch * HEADS * ROPE_DIM * 6
+        batch, query_tokens, _, _ = self._validate(case.symbols)
+        rows = batch * query_tokens
+        values = rows * HEADS * HEAD_DIM
+        rope_flops = rows * HEADS * ROPE_DIM * 6
         hadamard_flops = values * int(math.log2(HEAD_DIM))
-        return {"flops": rope_flops + hadamard_flops, "estimated_bytes": values * 3 + batch * HEADS * 4, "throughput_units": values}
+        return {"flops": rope_flops + hadamard_flops, "estimated_bytes": values * 3 + rows * HEADS * 4, "throughput_units": values}
 
 
 SPEC = DeepSeekV4IndexerFp8QuantSpec()

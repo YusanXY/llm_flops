@@ -13,3 +13,9 @@ page tables and output allocation are prepared before timing. Only the public
 optimized kernel is captured and sampled in steady state.
 The control candidate is a byte-identical copy of this implementation,
 so its expected performance ratio is approximately 1x.
+
+Prefill projection CaseSpecs describe one request with `m` causal query
+tokens.  The SGLang row-wise transform ABI still receives `m` score rows and
+an internal contiguous expansion of the single request's page table, but all
+expanded rows contain the same physical page IDs.  This is an ABI adapter,
+not `m` requests; decode CaseSpecs retain true batched-request semantics.

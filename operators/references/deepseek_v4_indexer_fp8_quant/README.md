@@ -10,3 +10,9 @@ by `spec.normalize_output` after the timed call. The private SGLang JIT cache is
 materialized during worker import (`import_ms`), never during steady samples.
 The control candidate is a byte-identical copy of this implementation,
 so its expected performance ratio is approximately 1x.
+
+Prefill projection CaseSpecs describe one request with `m` contiguous query
+tokens.  The fused row kernel is stateless, so its ABI remains `[m,H,D]`, but
+the RoPE positions are the causal range `65536-m .. 65535` rather than `m`
+copies of position 65535.  Decode CaseSpecs retain true batched-request
+semantics.

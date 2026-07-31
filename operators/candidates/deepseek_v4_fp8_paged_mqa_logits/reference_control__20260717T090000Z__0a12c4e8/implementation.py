@@ -14,6 +14,17 @@ def operator(
     max_context,
     q_offset,
 ):
+    if q_fp8.ndim == 4:
+        return deep_gemm.fp8_paged_mqa_logits(
+            q_fp8,
+            kv_fused,
+            weights,
+            context_lens,
+            page_table,
+            schedule,
+            max_context,
+            False,
+        )
     result = deepgemm_paged_mqa_logits_split(
         deep_gemm.fp8_paged_mqa_logits,
         q_fp8,

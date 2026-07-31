@@ -22,7 +22,10 @@ LEGACY_TOPK = {
 def _projection_cases():
     return tuple(CaseSpec(
         f"{phase}__c4_topk_transform__m{m}__ctx65536__fp8_mxfp8",
-        {"batch": m, "length": 16384, "seq_len": 16384, "topk": 1024, "page_size": 64,
+        {"batch": 1 if phase == "prefill" else m,
+         "query_tokens": m if phase == "prefill" else 1,
+         "request_count": 1 if phase == "prefill" else m,
+         "length": 16384, "seq_len": 16384, "topk": 1024, "page_size": 64,
          "pattern": "random", "phase": phase, "quant_profile": "fp8_mxfp8",
          "raw_context": 65536, "model_input": m, "projection_adapter_id": "c4_topk_transform"},
         227, frozenset({"model_projection", f"deepseek_v4_{phase}", f"phase_{phase}",
@@ -97,34 +100,48 @@ class DeepSeekV4TopKTransformSpec:
     @staticmethod
     def _validate(symbols):
         batch, length, seq_len, topk, page_size = (int(symbols[n]) for n in ("batch", "length", "seq_len", "topk", "page_size"))
-        if batch <= 0 or length <= 0 or topk <= 0 or topk > 2048:
-            raise ValueError("batch/length/topk must be positive and topk <= 2048")
+        query_tokens = int(symbols.get("query_tokens", 1))
+        if batch <= 0 or query_tokens <= 0 or length <= 0 or topk <= 0 or topk > 2048:
+            raise ValueError("batch/query_tokens/length/topk must be positive and topk <= 2048")
         if seq_len < 0 or seq_len > length:
             raise ValueError("seq_len must satisfy 0 <= seq_len <= length")
         if seq_len < topk:
             raise ValueError("formal cases require seq_len >= topk; kernel -1 padding is tested separately")
         if page_size <= 0 or page_size & (page_size - 1):
             raise ValueError("page_size must be a positive power of two")
-        return batch, length, seq_len, topk, page_size
+        if symbols.get("phase") == "prefill" and batch != 1:
+            raise ValueError("prefill CaseSpec must describe exactly one request")
+        return batch, query_tokens, length, seq_len, topk, page_size
 
     def make_inputs(self, case, context):
         torch, plan = _runtime()
-        batch, length, seq_len, topk, page_size = self._validate(case.symbols)
+        batch, query_tokens, length, seq_len, topk, page_size = self._validate(case.symbols)
+        rows = batch * query_tokens
         device = next(iter(context.cuda), "cuda:0")
         generator = context.cuda.get(device)
         if generator is None:
             raise RuntimeError("deepseek_v4_topk_transform requires a CUDA generator")
-        scores = torch.randn((batch, length), device=device, dtype=torch.float32, generator=generator)
+        scores = torch.randn((rows, length), device=device, dtype=torch.float32, generator=generator)
         pattern = case.symbols.get("pattern", "random")
         if pattern == "tie":
             scores.fill_(-4.0)
             scores[:, : topk + 3] = 1.0
         elif pattern == "negative":
             scores.copy_(-scores.abs() - 0.01)
-        seq_lens = torch.full((batch,), seq_len, device=device, dtype=torch.int32)
+        if query_tokens > 1:
+            raw_context = int(case.symbols["raw_context"])
+            raw_prefix = raw_context - query_tokens
+            seq_lens = torch.div(
+                torch.arange(raw_prefix + 1, raw_context + 1, device=device, dtype=torch.int32),
+                4,
+                rounding_mode="floor",
+            )
+        else:
+            seq_lens = torch.full((rows,), seq_len, device=device, dtype=torch.int32)
         pages = (length + page_size - 1) // page_size
-        page_tables = torch.arange(batch * pages, device=device, dtype=torch.int32).view(batch, pages)
-        output = torch.empty((batch, topk), device=device, dtype=torch.int32)
+        request_tables = torch.arange(batch * pages, device=device, dtype=torch.int32).view(batch, pages)
+        page_tables = request_tables[:, None, :].expand(batch, query_tokens, pages).reshape(rows, pages).contiguous()
+        output = torch.empty((rows, topk), device=device, dtype=torch.int32)
         metadata = plan(seq_lens, static_threshold=0)
         return InputBundle(args=(scores, seq_lens, page_tables, output, page_size, metadata))
 
@@ -152,12 +169,20 @@ class DeepSeekV4TopKTransformSpec:
         return BatchedUnorderedTopKComparator(sampled="performance_only" in case.tags)
 
     def cost_model(self, case):
-        batch, _, seq_len, topk, _ = self._validate(case.symbols)
+        batch, query_tokens, _, seq_len, topk, _ = self._validate(case.symbols)
+        rows = batch * query_tokens
         # One auditable score comparison unit per valid score. The sort's exact
         # implementation-dependent comparison count is intentionally not
         # presented as hardware FLOPs.
-        work = batch * seq_len
-        return {"flops": work, "estimated_bytes": work * 4 + batch * topk * 4, "throughput_units": work}
+        if query_tokens > 1:
+            raw_context = int(case.symbols["raw_context"])
+            work = sum(
+                (raw_context - query_tokens + index + 1) // 4
+                for index in range(query_tokens)
+            )
+        else:
+            work = rows * seq_len
+        return {"flops": work, "estimated_bytes": work * 4 + rows * topk * 4, "throughput_units": work}
 
 
 SPEC = DeepSeekV4TopKTransformSpec()

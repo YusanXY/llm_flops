@@ -1,0 +1,26 @@
+schema_version: 1
+operator_id: deepseek_v4_chunked_mega_mqa_logits
+contract_version: 1
+description: DeepSeek V4 causal paged-MQA full-KV-reuse control with an exactly equivalent historical-activation K-recompute boundary
+reference_entrypoint: implementation:operator
+spec_entrypoint: spec:SPEC
+device_types: [cuda]
+tags: [deepseek_v4, mega, causal_prefill, c4, full_kv_reuse, hybrid_recompute_boundary, shared_paged_kv, logits]
+correctness:
+  default_comparator: floating
+  rtol: 0.00001
+  atol: 0.000001
+  equal_nan: false
+  determinism_repeats: 1
+performance:
+  timer: cuda_event
+  graph_mode: disabled
+  warmup: 2
+  samples: 10
+  inner_iterations: 1
+  timeout_s: 3600
+  regression_threshold_pct: 5.0
+  max_cv: 0.10
+  unsupported_policy: fail
+  gpu_lock_timeout_s: 600
+cost_model: spec:cost_model

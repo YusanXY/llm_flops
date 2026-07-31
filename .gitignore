@@ -4,3 +4,5 @@ __pycache__/
 logs/
 results/
 *.egg-info/
+*.log
+.build*/
