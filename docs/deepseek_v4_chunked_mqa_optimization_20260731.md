@@ -50,8 +50,9 @@ from `--set full`, `m=4096`, on GPU 3 under the repository lock.
 | V20 | explicit group2 TMA completion aggregation | failed | n/a | n/a | n/a | n/a | n/a | n/a | rejected: launch failure, then barrier deadlock |
 | V21 | Q32 cluster, eight M256 passes, five KV stages | 9/9 | 0.4588 ms average | 457.76 us | 326.320 MB | 23.380 M | 168 | 224.768 KB | valid traffic reduction, slower |
 | V22 | V21 with four KV stages | 9/9 | 0.4571 ms average | 456.99 us | 326.320 MB | 23.392 M | 168 | 207.872 KB | faster than V21, still behind V17 |
-| V23 | V17 with four KV stages | 9/9 | 0.4477 ms average | 447.52 us | 586.490 MB | 31.353 M | 168 | 138.240 KB | current champion |
+| V23 | V17 with four KV stages | 9/9 | 0.4477 ms average | 447.52 us | 586.490 MB | 31.353 M | 168 | 138.240 KB | previous champion |
 | V24 | V23 with three KV stages | 9/9 | 0.4828 ms average | 484.80 us | 586.490 MB | 31.391 M | 168 | 121.344 KB | rejected: insufficient producer lead |
+| V25 | V23 with direct full-TMEM consumer dependency | 9/9 | 0.4476 ms average | 445.73 us | 586.490 MB | 31.403 M | 168 | 138.240 KB | current champion |
 
 V5 (Q1/KV6) is intentionally excluded because its dynamic shared-memory
 request is invalid on the device and it did not pass correctness execution.
@@ -227,6 +228,24 @@ short-scoreboard stall growth from 1,241 to 2,903 samples (`+133.9%`), together
 with sleeping `+23.6%` and barrier `+12.7%`.  Three KV stages therefore cannot
 keep the consumer supplied; V23's four-stage ring is the measured minimum.
 
+V25 removes the math consumers' redundant local `full_kv_barrier` wait.  The
+MMA issue warp still waits for both CTAs' KV completion before issuing TCGen05,
+and the consumer waits for the downstream full-TMEM completion before loading
+its local scale and accumulator.  This preserves the exact dependency and
+arithmetic order while placing consumers directly on the true critical event.
+All nine cases pass without other compute.  Formal median averages are
+`0.118653 / 0.229211 / 0.447591 ms`; the improvement over V23 is small in the
+same-run benchmark but consistent across all three sizes.
+
+Full NCU provides the promotion evidence: m4096 drops from `447.520` to
+`445.728 us` (`-0.40%`), tensor-pipe activity rises to `54.852%`, SM throughput
+to `61.353%`, and PC-sampling wait stalls fall from 5,145 to 4,772 (`-7.25%`).
+TMA bytes, L1 sectors, registers, and dynamic SMEM are unchanged.  NSYS records
+`444.030 us`, versus V23's `444.639 us`.  Oracle max error remains
+`4.76837158203125e-7`, cache state remains bitwise unchanged, and PTX/SASS
+retain 16 `tcgen05.mma.cta_group::2` / 16 `UTCQMMA.2CTA` instructions.  V25 is
+therefore the current production champion.
+
 ## Evidence locations
 
 Full reports are intentionally kept outside Git history under:
@@ -253,6 +272,7 @@ The current Q16 reports are:
 - `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q32_2smkv_2wg_q1kv4_chunk64_v22_single_request_20260731/`
 - `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q16_2smkv_2wg_q1kv4_chunk64_v23_single_request_20260731/`
 - `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q16_2smkv_2wg_q1kv3_chunk64_v24_single_request_20260731/`
+- `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q16_2smkv_2wg_q1kv4_directtmem_v25_single_request_20260731/`
 
 Mirrored local archives are under `D:\work\agent4kernel\mega_results\v18_*`
-through `v24_*`; V20 failures are under `mega_results\v20_failure`.
+through `v25_*`; V20 failures are under `mega_results\v20_failure`.
