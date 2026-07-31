@@ -42,6 +42,9 @@ from `--set full`, `m=4096`, on GPU 3 under the repository lock.
 | V12 | collapse heads into `q_eff` | failed | n/a | n/a | reduced | reduced | n/a | n/a | invalid: per-head ReLU prevents the transform |
 | V13 | true `cta_group::2` M256, half-KV per CTA | 9/9 | 0.5715-0.5719 ms | 575.71 us | 1.228 GB | 51.275 M | 224 | 121.344 KB | valid traffic proof, slower than V4 |
 | V14 | V13 plus two fixed Q-pair consumer WGs | 9/9 | 0.5189-0.5227 ms | 522.88 us | 1.228 GB | 51.249 M | 168 | 121.344 KB | 9% faster than V13, still 11% behind V4 |
+| V15 | cluster Q16, four M256 passes, alternating consumer WGs | 9/9 | 0.4579-0.4591 ms | 461.98 us | 692.191 MB | 34.570 M | 168 | 155.136 KB | first two-SM traffic win near V4 latency |
+| V16 | V15 with 32 KV splits per scheduler chunk | 9/9 | 0.4527-0.4536 ms | 453.92 us | 621.863 MB | 32.456 M | 168 | 155.136 KB | first two-SM benchmark winner |
+| V17 | V16 with 64 KV splits per scheduler chunk | 9/9 | 0.4497-0.4509 ms | 448.48 us | 586.490 MB | 31.414 M | 168 | 155.136 KB | current champion |
 
 V5 (Q1/KV6) is intentionally excluded because its dynamic shared-memory
 request is invalid on the device and it did not pass correctness execution.
@@ -103,6 +106,41 @@ This targets the V6 traffic reduction without accepting V6's single-math-WG
 serialization. A duplicate-load cluster will only be used as a scheduling and
 correctness bring-up point; it is not a performance candidate.
 
+## Q16 cluster and scheduler-chunk result
+
+V15 extends the genuine two-SM path to one Q8 tile per CTA, or Q16 per cluster,
+and issues four `cta_group::2` M256N256 passes for each KV tile.  Two consumer
+warp groups alternate the four Q pairs over two TMEM stages.  Because the SM100
+TMA 2D box cannot legally cover Q8 in one transfer, Q is loaded as two Q4 TMA
+transactions; this does not change the per-head ReLU, FP32 accumulation and
+reduction, scale placement, causal mask, or output order.
+
+Increasing only the scheduler chunk from 16 to 32 and then 64 KV splits reduced
+loop/scheduling overhead and repeated cache traffic.  The clean three-seed
+formal averages for V17 are `0.119235`, `0.230809`, and `0.450416 ms` for
+`m=1024/2048/4096`, respectively.  Relative to V16 this is a further
+`1.87% / 0.63% / 0.61%` reduction.  V17's full m4096 NCU report records:
+
+- duration: `448.480 us`
+- DRAM read/write: `46.979 / 203.773 MB`
+- TMA receiver traffic: `586.490 MB`
+- L1 sectors and hit rate: `8.220 M`, `0.120%`
+- L2 sectors and hit rate: `31.414 M`, `53.396%`
+- tensor-pipe activity: `54.510%`
+- SM throughput: `60.971%`
+- active warps per scheduler: `2.996`
+- registers and dynamic shared memory: `168/thread`, `155.136 KB/block`
+
+The independent oracle maximum absolute error remains
+`4.76837158203125e-7`, and the physical KV cache remains bitwise unchanged.
+Generated PTX contains 16 `tcgen05.mma.cta_group::2` instructions; generated
+SASS contains 16 `UTCQMMA.2CTA`, four `UTCBAR.2CTA.MULTICAST`, seven `UTMALDG`,
+and 16 `LDTM` instructions.  Full-source sampling still places the largest
+long-scoreboard samples on the polling branches immediately following
+`SYNCS.PHASECHK.TRANS64.TRYWAIT`, before the TMEM loads.  The next controlled
+experiment therefore increases the chunk once more, while retaining V17 if
+the longer readiness interval stops paying for the saved scheduler traffic.
+
 ## Evidence locations
 
 Full reports are intentionally kept outside Git history under:
@@ -117,3 +155,9 @@ The genuine two-SM reports are:
 
 - `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q8_2smkv_dualq4_q1kv5_v13_single_request_20260731/ncu/m4096_cluster2_q8_2smkv_dualq4_q1kv5_v13_set_full.ncu-rep`
 - `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q8_2smkv_2wg_q1kv5_v14_single_request_20260731/ncu/m4096_cluster2_q8_2smkv_2wg_q1kv5_v14_set_full.ncu-rep`
+
+The current Q16 reports are:
+
+- `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q16_2smkv_2wg_q1kv5_v15_single_request_20260731/`
+- `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q16_2smkv_2wg_q1kv5_chunk32_v16_single_request_20260731/`
+- `results/deepseek_v4_chunked_mega_mqa_logits/cluster2_q16_2smkv_2wg_q1kv5_chunk64_v17_single_request_20260731/`
