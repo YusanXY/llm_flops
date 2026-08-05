@@ -1,0 +1,8 @@
+schema_version: 1
+operator_id: deepseek_v4_sparse_prefill_attention
+candidate_id: flashinfer_block_sparse__20260805T000000Z__f1a5b200
+entrypoint: implementation:operator
+framework: flashinfer
+metadata:
+  purpose: flashinfer-1x1-bsr-sparse-prefill
+  flashinfer_version: 0.6.12

@@ -8,8 +8,8 @@ device_types: [cuda]
 tags: [deepseek_v4, attention, sparse, decode, paged_kv]
 correctness:
   default_comparator: floating
-  rtol: 0.03
-  atol: 0.1
+  rtol: 0.00001
+  atol: 0.000001
   determinism_repeats: 1
 performance:
   timer: auto

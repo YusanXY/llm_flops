@@ -8,6 +8,8 @@ device_types: [cuda]
 tags: [deepseek_v4, fp8, indexer, quantization]
 correctness:
   default_comparator: quantized
+  rtol: 0.00001
+  atol: 0.000001
   determinism_repeats: 1
 performance:
   timer: cuda_graph

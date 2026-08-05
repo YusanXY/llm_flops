@@ -4,7 +4,7 @@ operators:
   include: ["deepseek_v4_fp8_gemm_nt", "deepseek_v4_indexer_fp8_quant", "deepseek_v4_fp8_paged_mqa_logits", "deepseek_v4_topk_transform", "deepseek_v4_sparse_prefill_attention", "deepseek_v4_trtllm_fp8_mxfp8_moe"]
   exclude: []
 candidates:
-  include: ["test_impl__*", "reference_control__*"]
+  include: ["test_impl__*", "reference_control__*", "flashinfer_block_sparse__*"]
 cases:
   tags: [deepseek_v4_prefill]
 mode: all

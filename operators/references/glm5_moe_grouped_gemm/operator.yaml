@@ -8,8 +8,8 @@ device_types: [cuda]
 tags: [glm5, moe, deepgemm, fp8, legacy]
 correctness:
   default_comparator: floating
-  rtol: 0.02
-  atol: 0.2
+  rtol: 0.00001
+  atol: 0.000001
   equal_nan: false
   determinism_repeats: 1
 performance:

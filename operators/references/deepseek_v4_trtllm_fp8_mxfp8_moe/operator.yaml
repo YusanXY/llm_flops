@@ -8,8 +8,8 @@ device_types: [cuda]
 tags: [deepseek_v4, moe, routed_expert, flashinfer, fp8, mxfp8]
 correctness:
   default_comparator: floating
-  rtol: 0.03
-  atol: 0.2
+  rtol: 0.00001
+  atol: 0.000001
   equal_nan: false
   determinism_repeats: 1
 performance:

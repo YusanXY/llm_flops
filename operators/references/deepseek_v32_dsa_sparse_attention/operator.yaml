@@ -1,11 +1,11 @@
 schema_version: 1
-operator_id: glm5_dsa_index_score
+operator_id: deepseek_v32_dsa_sparse_attention
 contract_version: 1
-description: GLM-5 DeepGEMM FP8 MQA index scores for prefill and paged decode
+description: Official FlashInfer MLSys 2026 baseline for DeepSeek-V3.2 DSA sparse attention
 reference_entrypoint: implementation:operator
 spec_entrypoint: spec:SPEC
 device_types: [cuda]
-tags: [glm5, dsa, indexer, mqa, fp8]
+tags: [deepseek_v32, dsa, attention, sparse, flashinfer, mlsys26]
 correctness:
   default_comparator: floating
   rtol: 0.00001
@@ -13,11 +13,11 @@ correctness:
   equal_nan: false
   determinism_repeats: 1
 performance:
-  timer: cuda_graph
-  graph_mode: enabled
+  timer: cuda_event
+  graph_mode: disabled
   warmup: 5
-  samples: 10
-  inner_iterations: 20
+  samples: 20
+  inner_iterations: 1
   timeout_s: 1800
   regression_threshold_pct: 10.0
   max_cv: 0.15
